@@ -1,0 +1,107 @@
+from fastapi import (
+    APIRouter,
+    HTTPException,
+    status,
+    Depends,
+    File,
+    Form,
+    UploadFile,
+)
+from pydantic import Field
+from postgrest import APIResponse, APIError
+from typing import Annotated
+from app.config.supabase import get_supabase
+from app.dependencies.auth import get_current_user
+from app.models.users import UserResponse
+from app.utils.interests import normalize_interest
+from app.services.users import get_user_by_id, delete_avatar
+
+router = APIRouter(prefix="/api/users", tags=["users"])
+
+
+@router.get("/me", response_model=UserResponse)
+async def get_curr_user(user_id: str = Depends(get_current_user)):
+    try:
+        user: dict | None = await get_user_by_id(user_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found."
+            )
+        return user
+    except HTTPException as _:
+        raise
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch user data. Please try again later.",
+        )
+
+
+@router.post("/", status_code=status.HTTP_201_CREATED, response_model=UserResponse)
+async def create_user(
+    name: str = Form(...),
+    age: Annotated[int, Field(ge=0)] = Form(...),
+    city: str = Form(...),
+    province: Annotated[str, Field(min_length=2, max_length=2)] = Form(...),
+    about: str = Form(...),
+    avatar: UploadFile | None = File(None),
+    interests: list[str] | None = Form(None),
+    children_age_ranges: list[str] = Form(...),
+    user_id: str = Depends(get_current_user),
+):
+    supabase = get_supabase()
+    avatar_url: str | None = None
+    if avatar:
+        try:
+            await supabase.storage.from_("avatars").upload(
+                path=f"{user_id}",
+                file=avatar.file,
+                file_options={"content-type": avatar.content_type},
+            )
+            avatar_url = await supabase.storage.from_("avatars").get_public_url(
+                f"{user_id}"
+            )
+        except Exception as _:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to upload avatar. Please try again later.",
+            )
+
+    normalized_interests = (
+        [normalize_interest(i) for i in interests] if interests else []
+    )
+    try:
+        res: APIResponse = await supabase.rpc(
+            "create_user_profile",
+            {
+                "p_user_id": user_id,
+                "p_name": name,
+                "p_age": age,
+                "p_city": city,
+                "p_province": province,
+                "p_about": about,
+                "p_avatar_url": avatar_url,
+                "p_interests": normalized_interests,
+                "p_children": children_age_ranges,
+            },
+        ).execute()
+        return res.data[0]
+    except APIError as e:
+        if avatar_url:
+            await delete_avatar(user_id)
+        if e.code == "23505":  # uniqueness violation
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="User already exists.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create user. Please try again later.",
+        )
+    except Exception as _:
+        if avatar_url:
+            await delete_avatar(user_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create user. Please try again later.",
+        )
