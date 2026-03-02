@@ -11,6 +11,7 @@ from pydantic import Field
 from postgrest import APIResponse, APIError
 from typing import Annotated
 from app.config.supabase import get_supabase
+from app.config.constants import IMAGE_MIME_TO_EXT
 from app.dependencies.auth import get_current_user
 from app.models.users import UserResponse
 from app.utils.interests import normalize_interest
@@ -52,14 +53,22 @@ async def create_user(
     supabase = get_supabase()
     avatar_url: str | None = None
     if avatar:
+        mime_type = avatar.content_type
+        if not mime_type or mime_type not in IMAGE_MIME_TO_EXT:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid avatar image type. Supported types: PNG, JPG, JPEG.",
+            )
+        file_path = user_id
+        file_contents = await avatar.read()
         try:
             await supabase.storage.from_("avatars").upload(
-                path=f"{user_id}",
-                file=avatar.file,
-                file_options={"content-type": avatar.content_type},
+                path=file_path,
+                file=file_contents,
+                file_options={"content-type": mime_type, "upsert": "true"},
             )
             avatar_url = await supabase.storage.from_("avatars").get_public_url(
-                f"{user_id}"
+                file_path
             )
         except Exception as _:
             raise HTTPException(
@@ -85,7 +94,7 @@ async def create_user(
                 "p_children": children_age_ranges,
             },
         ).execute()
-        return res.data[0]
+        return res.data
     except APIError as e:
         if avatar_url:
             await delete_avatar(user_id)
