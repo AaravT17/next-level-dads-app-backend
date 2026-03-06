@@ -7,15 +7,26 @@ from fastapi import (
     Form,
     UploadFile,
 )
+from fastapi.params import Query
 from pydantic import Field
 from postgrest import APIResponse, APIError
 from typing import Annotated
 from app.config.supabase import get_supabase
 from app.config.constants import IMAGE_MIME_TO_EXT
 from app.dependencies.auth import get_current_user
-from app.models.users import UserResponse
+from app.models.users import UserResponse, UserProfile
 from app.utils.interests import normalize_interest
-from app.services.users import get_user_by_id, delete_avatar
+from app.services.users import (
+    build_discover_profiles_query,
+    get_user_by_id,
+    delete_avatar,
+    resolve_connection_status,
+)
+from app.dependencies.db import get_db
+import asyncpg
+from datetime import datetime
+from uuid import UUID
+
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -113,4 +124,50 @@ async def create_user(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create user. Please try again later.",
+        )
+
+
+@router.get("/", response_model=list[UserProfile])
+async def get_discover_profiles(
+    interests: list[str] | None = Query(None),
+    children_age_ranges: list[str] | None = Query(None),
+    provinces: list[str] | None = Query(None),
+    age_ranges: list[str] | None = Query(None),
+    cursor_id: str | None = Query(None),
+    cursor_created_at: datetime | None = Query(None),
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        uid = UUID(user_id)
+        query, params = build_discover_profiles_query(
+            user_id=uid,
+            interests=interests,
+            children_age_ranges=children_age_ranges,
+            provinces=provinces,
+            age_ranges=age_ranges,
+            cursor_id=UUID(cursor_id) if cursor_id else None,
+            cursor_created_at=cursor_created_at,
+        )
+        res = await conn.fetch(query, *params)
+        profiles = [
+            UserProfile(
+                **{
+                    k: v
+                    for k, v in dict(r).items()
+                    if k not in ("requesting_id", "connection_status")
+                },
+                connection_status=resolve_connection_status(
+                    uid, r["requesting_id"], r["connection_status"]
+                ),
+            )
+            for r in res
+        ]
+        return profiles
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch profiles. Please try again later.",
         )
