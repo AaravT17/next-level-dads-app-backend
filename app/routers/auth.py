@@ -12,6 +12,7 @@ import os
 from app.dependencies.auth import get_current_access_token
 from app.utils.auth import set_refresh_cookie, clear_refresh_cookie
 
+
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 

@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, status, Depends
 from app.dependencies.auth import get_current_user
 from app.config.supabase import get_supabase
 
+
 router = APIRouter(prefix="/api/interests", tags=["interests"])
 
 
