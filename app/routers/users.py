@@ -8,20 +8,23 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.params import Query
-from pydantic import Field
 from postgrest import APIResponse, APIError
-from typing import Annotated
 from app.config.supabase import get_supabase
-from app.config.constants import IMAGE_MIME_TO_EXT
+from app.config.constants import (
+    IMAGE_MIME_TO_EXT,
+    MAX_NAME_LENGTH,
+    MAX_CITY_LENGTH,
+    MAX_BIO_LENGTH,
+)
 from app.dependencies.auth import get_current_user
-from app.models.users import UserResponse, UserProfile
+from app.models.users import UserResponse, UserProfileResponse
 from app.utils.interests import normalize_interest
 from app.services.users import (
     build_discover_profiles_query,
     get_user_by_id,
     delete_avatar,
-    resolve_connection_status,
 )
+from app.utils.users import resolve_connection_status
 from app.dependencies.db import get_db
 import asyncpg
 from datetime import datetime
@@ -51,11 +54,11 @@ async def get_curr_user(user_id: str = Depends(get_current_user)):
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=UserResponse)
 async def create_user(
-    name: str = Form(...),
-    age: Annotated[int, Field(ge=0)] = Form(...),
-    city: str = Form(...),
-    province: Annotated[str, Field(min_length=2, max_length=2)] = Form(...),
-    about: str = Form(...),
+    name: str = Form(..., max_length=MAX_NAME_LENGTH),
+    age: int = Form(..., ge=0, le=200),
+    city: str = Form(..., max_length=MAX_CITY_LENGTH),
+    province: str = Form(..., min_length=2, max_length=2),
+    about: str = Form(..., max_length=MAX_BIO_LENGTH),
     avatar: UploadFile | None = File(None),
     interests: list[str] | None = Form(None),
     children_age_ranges: list[str] = Form(...),
@@ -127,7 +130,7 @@ async def create_user(
         )
 
 
-@router.get("/", response_model=list[UserProfile])
+@router.get("/", response_model=list[UserProfileResponse])
 async def get_discover_profiles(
     interests: list[str] | None = Query(None),
     children_age_ranges: list[str] | None = Query(None),
@@ -151,7 +154,7 @@ async def get_discover_profiles(
         )
         res = await conn.fetch(query, *params)
         profiles = [
-            UserProfile(
+            UserProfileResponse(
                 **{
                     k: v
                     for k, v in dict(r).items()

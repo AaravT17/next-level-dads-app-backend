@@ -1,15 +1,15 @@
 from pydantic import BaseModel, Field
 from uuid import UUID
-from app.config.constants import MAX_BIO_LENGTH
+from app.config.constants import MAX_NAME_LENGTH, MAX_CITY_LENGTH, MAX_BIO_LENGTH
 from typing import Literal
 from datetime import datetime
 
 
 class UserResponse(BaseModel):
     id: UUID
-    name: str
-    age: int = Field(ge=0)
-    city: str
+    name: str = Field(max_length=MAX_NAME_LENGTH)
+    age: int = Field(ge=0, le=200)
+    city: str = Field(max_length=MAX_CITY_LENGTH)
     province: str = Field(min_length=2, max_length=2)
     about: str = Field(max_length=MAX_BIO_LENGTH)
     avatar_url: str | None
@@ -17,11 +17,11 @@ class UserResponse(BaseModel):
     children: list[str] = []
 
 
-class UserProfile(BaseModel):
+class UserProfileResponse(BaseModel):
     id: UUID
-    name: str
-    age: int = Field(ge=0)
-    city: str
+    name: str = Field(max_length=MAX_NAME_LENGTH)
+    age: int = Field(ge=0, le=200)
+    city: str = Field(max_length=MAX_CITY_LENGTH)
     province: str = Field(min_length=2, max_length=2)
     about: str = Field(max_length=MAX_BIO_LENGTH)
     avatar_url: str | None

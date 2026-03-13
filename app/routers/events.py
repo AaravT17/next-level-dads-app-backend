@@ -21,7 +21,7 @@ async def get_events(
     event_type: Literal["local", "virtual"] | None = Query(default=None, alias="type"),
     is_free: bool | None = None,
     cursor_id: str | None = None,
-    cursor_created_at: str | None = None,
+    cursor_created_at: datetime | None = None,
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
@@ -32,12 +32,12 @@ async def get_events(
             event_type=event_type,
             is_free=is_free,
             cursor_id=UUID(cursor_id) if cursor_id else None,
-            cursor_created_at=datetime.fromisoformat(cursor_created_at)
-            if cursor_created_at
-            else None,
+            cursor_created_at=cursor_created_at,
         )
         res = await conn.fetch(query, *params)
         return [EventResponse(**dict(r)) for r in res]
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as _:

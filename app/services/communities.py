@@ -27,7 +27,9 @@ def build_discover_communities_query(
 
     where_clause = " AND ".join(conditions)
     query = f"""
-        SELECT c.*, EXISTS (SELECT 1 FROM community_members cm WHERE cm.community_id = c.id AND cm.user_id = $1) AS is_member
+        SELECT c.*, 
+        EXISTS (SELECT 1 FROM community_members cm WHERE cm.community_id = c.id AND cm.user_id = $1) AS is_member,
+        (SELECT cm.role FROM community_members cm WHERE cm.community_id = c.id AND cm.user_id = $1) AS role
         FROM communities c
         WHERE {where_clause}
         ORDER BY c.created_at DESC, c.id DESC

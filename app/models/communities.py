@@ -5,6 +5,7 @@ from app.config.constants import (
     COMMUNITY_NAME_MAX_LENGTH,
     COMMUNITY_DESCRIPTION_MAX_LENGTH,
 )
+from typing import Literal
 
 
 class CommunityResponse(BaseModel):
@@ -17,3 +18,4 @@ class CommunityResponse(BaseModel):
     created_by: UUID | None = None
     created_at: datetime
     is_member: bool = False
+    role: Literal["admin", "member"] | None = None
