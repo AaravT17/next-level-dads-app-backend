@@ -17,17 +17,14 @@ class UserResponse(BaseModel):
     children: list[str] = []
 
 
-class UserProfileResponse(BaseModel):
-    id: UUID
-    name: str = Field(max_length=MAX_NAME_LENGTH)
-    age: int = Field(ge=0, le=200)
-    city: str = Field(max_length=MAX_CITY_LENGTH)
-    province: str = Field(min_length=2, max_length=2)
-    about: str = Field(max_length=MAX_BIO_LENGTH)
-    avatar_url: str | None
-    interests: list[str] = []
-    children: list[str] = []
+class UserProfileResponse(UserResponse):
     created_at: datetime
     connection_status: (
         Literal["pending_incoming", "pending_outgoing", "connected", "blocked"] | None
     ) = None
+
+
+class CommunityMemberResponse(UserResponse):
+    created_at: datetime
+    joined_at: datetime
+    role: Literal["admin", "member"] = Field(default="member")

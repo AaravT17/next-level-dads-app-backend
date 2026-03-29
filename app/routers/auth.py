@@ -83,6 +83,8 @@ async def set_oauth_session(credentials: OAuthSessionRequest, response: Response
             )
         set_refresh_cookie(response, credentials.refresh_token)
         return {"access_token": credentials.access_token}
+    except HTTPException as _:
+        raise
     except AuthApiError as _:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token."

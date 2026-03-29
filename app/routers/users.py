@@ -18,10 +18,12 @@ from app.config.constants import (
 )
 from app.dependencies.auth import get_current_user
 from app.models.users import UserResponse, UserProfileResponse
+from app.models.communities import CommunityResponse
+from app.models.events import EventResponse
 from app.utils.interests import normalize_interest
 from app.services.users import (
     build_discover_profiles_query,
-    get_user_by_id,
+    build_get_user_by_id_query,
     delete_avatar,
 )
 from app.utils.users import resolve_connection_status
@@ -29,26 +31,65 @@ from app.dependencies.db import get_db
 import asyncpg
 from datetime import datetime
 from uuid import UUID
+from app.services.communities import build_user_communities_query
+from app.services.events import build_user_events_query
 
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_curr_user(user_id: str = Depends(get_current_user)):
+async def get_curr_user(
+    conn: asyncpg.Connection = Depends(get_db), user_id: str = Depends(get_current_user)
+):
     try:
-        user: dict | None = await get_user_by_id(user_id)
-        if not user:
+        query, params = build_get_user_by_id_query(user_id=user_id)
+        res = await conn.fetchrow(query, *params)
+        if not res:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="User not found."
             )
-        return user
+        return UserResponse(**res)
     except HTTPException as _:
         raise
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch user data. Please try again later.",
+            detail="Failed to fetch user. Please try again later.",
+        )
+
+
+@router.get("/{id}", response_model=UserProfileResponse)
+async def get_user(
+    id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        query, params = build_get_user_by_id_query(user_id=id, curr_user_id=user_id)
+        res = await conn.fetchrow(query, *params)
+        if not res:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found."
+            )
+        return UserProfileResponse(
+            **{
+                k: v
+                for k, v in dict(res).items()
+                if k not in ("requesting_id", "connection_status")
+            },
+            connection_status=resolve_connection_status(
+                UUID(user_id),
+                res["requesting_id"],
+                res["connection_status"],
+            ),
+        )
+    except HTTPException as _:
+        raise
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch user. Please try again later.",
         )
 
 
@@ -173,4 +214,56 @@ async def get_discover_profiles(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch profiles. Please try again later.",
+        )
+
+
+@router.get("/me/communities", response_model=list[CommunityResponse])
+async def get_user_communities(
+    name: str | None = Query(None),
+    cursor_id: str | None = Query(None),
+    cursor_created_at: datetime | None = Query(None),
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        query, params = build_user_communities_query(
+            user_id=UUID(user_id),
+            name=name,
+            cursor_id=UUID(cursor_id) if cursor_id else None,
+            cursor_created_at=cursor_created_at,
+        )
+        res = await conn.fetch(query, *params)
+        return [CommunityResponse(**r) for r in res]
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch communities. Please try again later.",
+        )
+
+
+@router.get("/me/events", response_model=list[EventResponse])
+async def get_user_events(
+    name: str | None = Query(None),
+    cursor_id: str | None = Query(None),
+    cursor_starts_at: datetime | None = Query(None),
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        query, params = build_user_events_query(
+            user_id=UUID(user_id),
+            name=name,
+            cursor_id=UUID(cursor_id) if cursor_id else None,
+            cursor_starts_at=cursor_starts_at,
+        )
+        res = await conn.fetch(query, *params)
+        return [EventResponse(**r) for r in res]
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch events. Please try again later.",
         )

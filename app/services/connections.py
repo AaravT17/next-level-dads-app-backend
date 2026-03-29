@@ -1,9 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 from app.config.constants import (
-    CONNECTED_PAGE_LIMIT,
-    REQUESTED_PAGE_LIMIT,
-    REQUESTS_PAGE_LIMIT,
+    PROFILES_PAGE_LIMIT,
 )
 
 
@@ -45,7 +43,7 @@ def build_connected_query(
         ORDER BY c.updated_at DESC, c.connection_id DESC
         LIMIT ${i}
     """
-    params.append(CONNECTED_PAGE_LIMIT)
+    params.append(PROFILES_PAGE_LIMIT)
 
     return query, params
 
@@ -79,7 +77,7 @@ def build_requests_query(
         ORDER BY c.updated_at DESC, c.id DESC
         LIMIT ${i}
     """
-    params.append(REQUESTS_PAGE_LIMIT)
+    params.append(PROFILES_PAGE_LIMIT)
 
     return query, params
 
@@ -113,6 +111,6 @@ def build_requested_query(
         ORDER BY c.updated_at DESC, c.id DESC
         LIMIT ${i}
     """
-    params.append(REQUESTED_PAGE_LIMIT)
+    params.append(PROFILES_PAGE_LIMIT)
 
     return query, params

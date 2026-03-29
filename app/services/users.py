@@ -1,30 +1,23 @@
 from app.config.supabase import get_supabase
-from app.config.constants import AGE_RANGES, DISCOVER_PROFILES_PAGE_LIMIT
+from app.config.constants import AGE_RANGES, PROFILES_PAGE_LIMIT
 from datetime import datetime
 from uuid import UUID
 
 
-async def get_user_by_id(user_id: str) -> dict | None:
-    supabase = get_supabase()
-    res = (
-        await supabase.table("users")
-        .select("*, user_interests(interests(name)), user_children(age_range)")
-        .eq("id", user_id)
-        .execute()
-    )
-
-    if not res.data:
-        return None
-
-    # flatten interests, children age ranges
-    user = {
-        **res.data[0],
-        "interests": [
-            i["interests"]["name"] for i in res.data[0].get("user_interests", [])
-        ],
-        "children": [c["age_range"] for c in res.data[0].get("user_children", [])],
-    }
-    return user
+def build_get_user_by_id_query(
+    user_id: str, curr_user_id: str | None = None
+) -> tuple[str, list]:
+    params = [user_id, curr_user_id]
+    query = """
+        SELECT u.*, c.requesting_id, c.status AS connection_status
+        FROM user_profiles u
+        LEFT JOIN connections c ON (
+            (c.requesting_id = $2 AND c.requested_id = u.id) OR
+            (c.requested_id = $2 AND c.requesting_id = u.id)
+        )
+        WHERE u.id = $1
+    """
+    return query, params
 
 
 async def delete_avatar(user_id: str):
@@ -94,6 +87,6 @@ def build_discover_profiles_query(
         ORDER BY u.created_at DESC, u.id DESC
         LIMIT ${i}
     """
-    params.append(DISCOVER_PROFILES_PAGE_LIMIT)
+    params.append(PROFILES_PAGE_LIMIT)
 
     return query, params
