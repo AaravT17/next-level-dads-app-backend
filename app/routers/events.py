@@ -68,3 +68,65 @@ async def get_event_by_id(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch event details. Please try again later.",
         )
+
+
+@router.post("/{id}/attendees", status_code=status.HTTP_204_NO_CONTENT)
+async def register_for_event(
+    id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    # TODO: For paid events, integrate with payment gateway and only register user after successful payment
+    try:
+        id, user_id = UUID(id), UUID(user_id)
+        # check if the event is free or paid
+        query = """
+            SELECT price_cad from events WHERE id = $1
+        """
+        res = await conn.fetchval(query, *[id], column=0)
+        if res is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
+            )
+        price = float(res)
+        # for now, if the event is paid, do not allow registration through this endpoint
+        if price > 0:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot register for paid events through this endpoint.",
+            )
+        query = """
+            INSERT INTO event_attendees (event_id, user_id, joined_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT DO NOTHING
+        """
+        await conn.execute(query, *[id, user_id])
+        return
+    except HTTPException as _:
+        raise
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to register for event. Please try again later.",
+        )
+
+
+@router.delete("/{id}/attendees", status_code=status.HTTP_204_NO_CONTENT)
+async def unregister_from_event(
+    id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        id, user_id = UUID(id), UUID(user_id)
+        query = """
+            DELETE FROM event_attendees 
+            WHERE event_id = $1 AND user_id = $2
+        """
+        await conn.execute(query, *[id, user_id])
+        return
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to unregister from event. Please try again later.",
+        )

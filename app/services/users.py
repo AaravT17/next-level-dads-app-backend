@@ -73,7 +73,11 @@ def build_discover_profiles_query(
         i += 2
 
     # only select profiles that don't have an existing connection with the user
-    where_clause = "c.id IS NULL AND "
+    # where_clause = "c.id IS NULL AND "
+
+    where_clause = (
+        "(c.id IS NULL OR (c.requesting_id = $1 AND c.status = 'pending')) AND "
+    )
 
     where_clause += " AND ".join(conditions)
     query = f"""

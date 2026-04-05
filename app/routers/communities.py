@@ -108,3 +108,46 @@ async def get_community_members(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch community members. Please try again later.",
         )
+
+
+@router.post("/{id}/members", status_code=status.HTTP_204_NO_CONTENT)
+async def join_community(
+    id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        id, user_id = UUID(id), UUID(user_id)
+        query = """
+            INSERT INTO community_members (community_id, user_id, role, joined_at)
+            VALUES ($1, $2, 'member', NOW())
+            ON CONFLICT (community_id, user_id) DO NOTHING
+        """
+        await conn.execute(query, *[id, user_id])
+        return
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to join community. Please try again later.",
+        )
+
+
+@router.delete("/{id}/members", status_code=status.HTTP_204_NO_CONTENT)
+async def leave_community(
+    id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        id, user_id = UUID(id), UUID(user_id)
+        query = """
+            DELETE FROM community_members
+            WHERE community_id = $1 AND user_id = $2
+        """
+        await conn.execute(query, *[id, user_id])
+        return
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to leave community. Please try again later.",
+        )

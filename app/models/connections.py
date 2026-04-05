@@ -26,3 +26,9 @@ class ConnectionProfileResponse(BaseModel):
     connection_status: (
         Literal["pending_incoming", "pending_outgoing", "connected", "blocked"] | None
     ) = None
+
+
+class ConnectionStatusResponse(BaseModel):
+    connection_status: (
+        Literal["pending_incoming", "pending_outgoing", "connected", "blocked"] | None
+    ) = None
