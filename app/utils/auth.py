@@ -36,7 +36,7 @@ def set_refresh_cookie(response: Response, refresh_token: str):
         value=refresh_token,
         httponly=True,
         secure=os.getenv("ENV") == "production",
-        samesite="lax",
+        samesite="None" if os.getenv("ENV") == "production" else "lax",
         max_age=60 * 60 * 24 * REFRESH_TOKEN_EXPIRY_DAYS,
     )
 
@@ -46,5 +46,5 @@ def clear_refresh_cookie(response: Response):
         key="refresh_token",
         httponly=True,
         secure=os.getenv("ENV") == "production",
-        samesite="lax",
+        samesite="None" if os.getenv("ENV") == "production" else "lax",
     )
