@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from app.dependencies.auth import get_current_user
 from app.models.communities import CommunityResponse
 from app.models.users import CommunityMemberResponse
@@ -46,6 +46,37 @@ async def get_communities(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch communities. Please try again later.",
+        )
+
+
+@router.post("/", status_code=status.HTTP_201_CREATED)
+async def create_community(
+    name: str = Body(..., max_length=100),
+    description: str | None = Body(None, max_length=500),
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        async with conn.transaction():
+            query = """
+                INSERT INTO communities (name, description, created_by, created_at)
+                VALUES ($1, $2, $3, NOW())
+                RETURNING id
+            """
+            res = await conn.fetchrow(query, *[name, description, UUID(user_id)])
+            if not res:
+                raise Exception("Failed to create community.")
+            community_id = res["id"]
+            query = """
+                INSERT INTO community_members (community_id, user_id, role, joined_at)
+                VALUES ($1, $2, 'admin', NOW())
+            """
+            await conn.execute(query, *[community_id, UUID(user_id)])
+        return {"id": str(community_id)}
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create community. Please try again later.",
         )
 
 

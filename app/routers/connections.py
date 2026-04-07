@@ -10,7 +10,6 @@ from app.services.connections import (
 from uuid import UUID
 from datetime import datetime
 from app.models.connections import (
-    ConnectionCountResponse,
     ConnectionProfileResponse,
     ConnectionStatusResponse,
 )
@@ -21,29 +20,6 @@ router = APIRouter(
     prefix="/api/connections",
     tags=["connections"],
 )
-
-
-@router.get("/count", response_model=ConnectionCountResponse)
-async def get_connection_counts(
-    user_id: str = Depends(get_current_user),
-    conn: asyncpg.Connection = Depends(get_db),
-):
-    try:
-        query = """
-            SELECT
-                COUNT(*) FILTER (WHERE status = 'accepted' AND (requesting_id = $1 OR requested_id = $1)) AS connections,
-                COUNT(*) FILTER (WHERE status = 'pending' AND requested_id = $1) AS requests
-            FROM connections
-        """
-        res = await conn.fetchrow(query, UUID(user_id))
-        return ConnectionCountResponse(**dict(res))
-    except HTTPException:
-        raise
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch connection data. Please try again later.",
-        )
 
 
 @router.get("/connected", response_model=list[ConnectionProfileResponse])

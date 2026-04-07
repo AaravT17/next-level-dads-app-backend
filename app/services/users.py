@@ -20,11 +20,12 @@ def build_get_user_by_id_query(
     return query, params
 
 
-async def delete_avatar(user_id: str):
+async def delete_avatar_from_storage(user_id: str):
     supabase = get_supabase()
     try:
         await supabase.storage.from_("avatars").remove([user_id])
     except Exception as _:
+        # TODO: log the error
         pass
 
 
@@ -71,9 +72,6 @@ def build_discover_profiles_query(
         conditions.append(f"(u.created_at, u.id) < (${i}, ${i + 1})")
         params.extend([cursor_created_at, cursor_id])
         i += 2
-
-    # only select profiles that don't have an existing connection with the user
-    # where_clause = "c.id IS NULL AND "
 
     where_clause = (
         "(c.id IS NULL OR (c.requesting_id = $1 AND c.status = 'pending')) AND "

@@ -5,11 +5,6 @@ from typing import Literal
 from app.config.constants import MAX_BIO_LENGTH
 
 
-class ConnectionCountResponse(BaseModel):
-    connections: int
-    requests: int
-
-
 class ConnectionProfileResponse(BaseModel):
     id: UUID
     name: str

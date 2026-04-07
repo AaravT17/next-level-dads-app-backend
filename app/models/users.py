@@ -28,3 +28,10 @@ class CommunityMemberResponse(UserResponse):
     created_at: datetime
     joined_at: datetime
     role: Literal["admin", "member"] = Field(default="member")
+
+
+class UserStatsResponse(BaseModel):
+    connections: int
+    requests: int
+    communities_joined: int
+    events_registered_for: int
