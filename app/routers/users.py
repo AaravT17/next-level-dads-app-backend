@@ -10,7 +10,7 @@ from fastapi import (
     Query,
 )
 from postgrest import APIResponse, APIError
-from app.config.supabase import get_supabase
+from app.config.supabase import get_supabase_admin
 from app.config.constants import (
     IMAGE_MIME_TO_EXT,
     MAX_NAME_LENGTH,
@@ -106,7 +106,7 @@ async def create_user(
     children_age_ranges: list[str] = Form(...),
     user_id: str = Depends(get_current_user),
 ):
-    supabase = get_supabase()
+    supabase_admin = get_supabase_admin()
     avatar_url: str | None = None
     if avatar:
         mime_type = avatar.content_type
@@ -118,12 +118,12 @@ async def create_user(
         file_path = user_id
         file_contents = await avatar.read()
         try:
-            await supabase.storage.from_("avatars").upload(
+            await supabase_admin.storage.from_("avatars").upload(
                 path=file_path,
                 file=file_contents,
                 file_options={"content-type": mime_type, "upsert": "true"},
             )
-            avatar_url = await supabase.storage.from_("avatars").get_public_url(
+            avatar_url = await supabase_admin.storage.from_("avatars").get_public_url(
                 file_path
             )
         except Exception as e:
@@ -137,7 +137,7 @@ async def create_user(
         [normalize_interest(i) for i in interests] if interests else []
     )
     try:
-        res: APIResponse = await supabase.rpc(
+        res: APIResponse = await supabase_admin.rpc(
             "create_user_profile",
             {
                 "p_user_id": user_id,
@@ -361,7 +361,7 @@ async def update_avatar(
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    supabase = get_supabase()
+    supabase_admin = get_supabase_admin()
     mime_type = avatar.content_type
     if not mime_type or mime_type not in IMAGE_MIME_TO_EXT:
         raise HTTPException(
@@ -371,12 +371,14 @@ async def update_avatar(
     file_path = user_id
     file_contents = await avatar.read()
     try:
-        await supabase.storage.from_("avatars").upload(
+        await supabase_admin.storage.from_("avatars").upload(
             path=file_path,
             file=file_contents,
             file_options={"content-type": mime_type, "upsert": "true"},
         )
-        avatar_url = await supabase.storage.from_("avatars").get_public_url(file_path)
+        avatar_url = await supabase_admin.storage.from_("avatars").get_public_url(
+            file_path
+        )
         query = """
             UPDATE users SET avatar_url = $1 WHERE id = $2
         """
@@ -384,7 +386,8 @@ async def update_avatar(
         return {"avatar_url": avatar_url}
     except HTTPException as _:
         raise
-    except Exception as _:
+    except Exception as e:
+        print(f"Exception in avatar upload: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update avatar. Please try again later.",

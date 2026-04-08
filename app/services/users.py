@@ -1,4 +1,4 @@
-from app.config.supabase import get_supabase
+from app.config.supabase import get_supabase_admin
 from app.config.constants import AGE_RANGES, PROFILES_PAGE_LIMIT
 from datetime import datetime
 from uuid import UUID
@@ -21,11 +21,11 @@ def build_get_user_by_id_query(
 
 
 async def delete_avatar_from_storage(user_id: str):
-    supabase = get_supabase()
+    supabase_admin = get_supabase_admin()
     try:
-        await supabase.storage.from_("avatars").remove([user_id])
-    except Exception as _:
-        # TODO: log the error
+        await supabase_admin.storage.from_("avatars").remove([user_id])
+    except Exception as e:
+        print(f"Error deleting avatar: {e}")
         pass
 
 
