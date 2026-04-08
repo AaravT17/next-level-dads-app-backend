@@ -24,8 +24,8 @@ async def delete_avatar_from_storage(user_id: str):
     supabase_admin = get_supabase_admin()
     try:
         await supabase_admin.storage.from_("avatars").remove([user_id])
-    except Exception as e:
-        print(f"Error deleting avatar: {e}")
+    except Exception as _:
+        # TODO: log the error properly
         pass
 
 

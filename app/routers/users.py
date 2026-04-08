@@ -9,7 +9,6 @@ from fastapi import (
     Body,
     Query,
 )
-from postgrest import APIResponse, APIError
 from app.config.supabase import get_supabase_admin
 from app.config.constants import (
     IMAGE_MIME_TO_EXT,
@@ -104,6 +103,7 @@ async def create_user(
     avatar: UploadFile | None = File(None),
     interests: list[str] | None = Form(None),
     children_age_ranges: list[str] = Form(...),
+    conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
     supabase_admin = get_supabase_admin()
@@ -126,47 +126,58 @@ async def create_user(
             avatar_url = await supabase_admin.storage.from_("avatars").get_public_url(
                 file_path
             )
-        except Exception as e:
-            print(f"Exception in avatar upload: {e}")
+        except Exception as _:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to upload avatar. Please try again later.",
             )
 
-    normalized_interests = (
-        [normalize_interest(i) for i in interests] if interests else []
-    )
     try:
-        res: APIResponse = await supabase_admin.rpc(
-            "create_user_profile",
-            {
-                "p_user_id": user_id,
-                "p_name": name,
-                "p_age": age,
-                "p_city": city,
-                "p_province": province,
-                "p_about": about,
-                "p_avatar_url": avatar_url,
-                "p_interests": normalized_interests,
-                "p_children": children_age_ranges,
-            },
-        ).execute()
-        return res.data
-    except APIError as e:
-        print(f"APIError in create_user: {e}")
+        async with conn.transaction():
+            query = """
+                INSERT INTO users (id, name, age, city, province, about, avatar_url)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING *
+            """
+            user_res = await conn.fetchrow(
+                query,
+                *[UUID(user_id), name, age, city, province, about, avatar_url],
+            )
+            normalized_interests = []
+            if interests is not None:
+                normalized_interests = [normalize_interest(i) for i in interests]
+                query = """
+                    INSERT INTO interests (name)
+                    SELECT unnest($1::text[])
+                    ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+                    RETURNING id, name
+                """
+                res = await conn.fetch(query, *[normalized_interests])
+                interest_ids = [r["id"] for r in res]
+                query = """
+                    INSERT INTO user_interests (user_id, interest_id)
+                    SELECT $1, unnest($2::uuid[])
+                """
+                await conn.execute(query, *[UUID(user_id), interest_ids])
+            query = """
+                INSERT INTO user_children (user_id, age_range)
+                SELECT $1, unnest($2::text[])
+            """
+            await conn.execute(query, *[UUID(user_id), children_age_ranges])
+            return UserResponse(
+                **user_res,
+                interests=normalized_interests,
+                children=children_age_ranges,
+            )
+    except asyncpg.exceptions.UniqueViolationError as _:
+        # unique violation can occur if user tries to create a profile when one already exists for them
         if avatar_url:
             await delete_avatar_from_storage(user_id)
-        if e.code == "23505":  # uniqueness violation
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="User already exists.",
-            )
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create user. Please try again later.",
+            status_code=status.HTTP_409_CONFLICT,
+            detail="User already exists.",
         )
-    except Exception as e:
-        print(f"Exception in create_user: {e}")
+    except Exception as _:
         if avatar_url:
             await delete_avatar_from_storage(user_id)
         raise HTTPException(
@@ -386,8 +397,7 @@ async def update_avatar(
         return {"avatar_url": avatar_url}
     except HTTPException as _:
         raise
-    except Exception as e:
-        print(f"Exception in avatar upload: {e}")
+    except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update avatar. Please try again later.",
