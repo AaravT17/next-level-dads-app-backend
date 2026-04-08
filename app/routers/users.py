@@ -126,7 +126,8 @@ async def create_user(
             avatar_url = await supabase.storage.from_("avatars").get_public_url(
                 file_path
             )
-        except Exception as _:
+        except Exception as e:
+            print(f"Exception in avatar upload: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to upload avatar. Please try again later.",
@@ -152,6 +153,7 @@ async def create_user(
         ).execute()
         return res.data
     except APIError as e:
+        print(f"APIError in create_user: {e}")
         if avatar_url:
             await delete_avatar_from_storage(user_id)
         if e.code == "23505":  # uniqueness violation
@@ -163,7 +165,8 @@ async def create_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create user. Please try again later.",
         )
-    except Exception as _:
+    except Exception as e:
+        print(f"Exception in create_user: {e}")
         if avatar_url:
             await delete_avatar_from_storage(user_id)
         raise HTTPException(
