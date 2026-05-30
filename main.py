@@ -11,6 +11,7 @@ from app.routers.communities import router as communities_router
 from app.routers.events import router as events_router
 from app.routers.connections import router as connections_router
 from app.routers.chats import router as chats_router
+from app.routers.ws import router as ws_router
 from app.config.redis import init_redis, close_redis
 from app.ws.pubsub import init_pubsub, close_pubsub
 from fastapi.middleware.cors import CORSMiddleware
@@ -58,3 +59,4 @@ app.include_router(communities_router)
 app.include_router(events_router)
 app.include_router(connections_router)
 app.include_router(chats_router)
+app.include_router(ws_router)
