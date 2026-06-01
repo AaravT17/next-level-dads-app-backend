@@ -1,32 +1,33 @@
 from fastapi import WebSocket
 from app.ws.pubsub import get_pubsub
 import json
+import asyncio
 
 
 active_connections: dict[str, dict[str, WebSocket]] = {}
-
-# Note: May need to add a lock to synchronize access to active_connections as well as subscribing/unsubscribing to
-# channels in the future, should be fine for now in practice
+lock = asyncio.Lock()
 
 
 async def connect(user_id: str, connection_id: str, ws: WebSocket):
     await ws.accept()
-    if user_id in active_connections:
-        active_connections[user_id][connection_id] = ws
-    else:
-        active_connections[user_id] = {connection_id: ws}
-        await get_pubsub().subscribe(**{f'messages:{user_id}': handle_msg})
+    async with lock:
+        if user_id in active_connections:
+            active_connections[user_id][connection_id] = ws
+        else:
+            active_connections[user_id] = {connection_id: ws}
+            await get_pubsub().subscribe(**{f'messages:{user_id}': handle_msg})
 
 
 async def disconnect(user_id: str, connection_id: str):
-    if user_id not in active_connections:
-        return
+    async with lock:
+        if user_id not in active_connections:
+            return
 
-    active_connections[user_id].pop(connection_id, None)
-    if active_connections[user_id] == {}:
-        # no active connections left for the user, remove entry from active_connections and unsubscribe from channel
-        active_connections.pop(user_id, None)
-        await get_pubsub().unsubscribe(f'messages:{user_id}')
+        active_connections[user_id].pop(connection_id, None)
+        if active_connections[user_id] == {}:
+            # no active connections left for the user, remove entry from active_connections and unsubscribe from channel
+            active_connections.pop(user_id, None)
+            await get_pubsub().unsubscribe(f'messages:{user_id}')
 
 
 async def handle_msg(msg: dict):
