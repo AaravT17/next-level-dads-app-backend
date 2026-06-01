@@ -38,10 +38,14 @@ async def handle_msg(msg: dict):
     except json.JSONDecodeError:
         # failed to decode message
         return
-    user_ws = active_connections.get(data['user_id'])
-    if user_ws:
-        # broadcast the message to all active connections for the user
-        for ws in user_ws.values():
+
+    # broadcast the message to all active connections for the user
+    user_ws_dict = active_connections.get(data['user_id'])
+    if user_ws_dict:
+        # capture a snapshot of active connections for the user, prevents runtime errors
+        # in case it changes while we're broadcasting
+        user_ws = list(user_ws_dict.values())
+        for ws in user_ws:
             try:
                 await ws.send_json(data['msg'])
             except Exception as _:
