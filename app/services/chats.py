@@ -1,8 +1,14 @@
 import asyncpg
+import asyncio
 from datetime import datetime
 from uuid import UUID
 from fastapi import status, HTTPException
-from app.config.constants import CHAT_PREVIEWS_PAGE_LIMIT, CHAT_MESSAGES_PAGE_LIMIT
+from app.config.constants import (
+    CHAT_PREVIEWS_PAGE_LIMIT,
+    CHAT_MESSAGES_PAGE_LIMIT,
+    CHAT_PARTICIPANTS_PAGE_LIMIT,
+    CHAT_ADDABLE_PARTICIPANTS_PAGE_LIMIT,
+)
 from app.config.redis import publish
 from app.models.chats import (
     ChatResponse,
@@ -12,8 +18,12 @@ from app.models.chats import (
     ReplyToResponse,
     CreateChatRequest,
     SendMessageRequest,
+    EditMessageRequest,
+    EditMessageResponse,
+    ChatParticipantResponse,
+    AddParticipantsRequest,
+    ChatAddableParticipantResponse,
 )
-import asyncio
 
 
 def _build_chat_preview_row(r) -> ChatResponse:
@@ -21,7 +31,7 @@ def _build_chat_preview_row(r) -> ChatResponse:
     if r['last_message_id'] is not None:
         last_message = LastMessageResponse(
             id=r['last_message_id'],
-            content=r['last_message_content'],
+            content='' if r['last_message_is_deleted'] else r['last_message_content'],
             sender_id=r['last_message_sender_id'],
             sender_name=r['last_message_sender_name'],
             created_at=r['last_message_created_at'],
@@ -149,7 +159,9 @@ async def create_chat(
 
     connected_ids = set(r['user_id'] for r in connections)
     if any(pid not in connected_ids for pid in participant_ids):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid participant IDs')
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail='You can only add users with whom you are connected'
+        )
 
     if len(participant_ids) == 1:
         try:
@@ -174,8 +186,9 @@ async def create_chat(
         try:
             async with conn.transaction():
                 chat_id = await conn.fetchval(
-                    "INSERT INTO chats (type, name) VALUES ('group', $1) RETURNING id",
+                    "INSERT INTO chats (type, name, created_by) VALUES ('group', $1, $2) RETURNING id",
                     name,
+                    user_id,
                 )
                 await conn.executemany(
                     'INSERT INTO chat_participants (chat_id, user_id, is_admin) VALUES ($1, $2, $3)',
@@ -267,7 +280,7 @@ async def get_messages(
         if r['reply_to_id'] is not None:
             reply_to = ReplyToResponse(
                 id=r['reply_to_id'],
-                content=r['reply_to_content'],
+                content='' if r['reply_to_is_deleted'] else r['reply_to_content'],
                 sender_id=r['reply_to_sender_id'],
                 sender_name=r['reply_to_sender_name'],
                 is_deleted=r['reply_to_is_deleted'],
@@ -279,7 +292,7 @@ async def get_messages(
                 sender_id=r['sender_id'],
                 sender_name=r['sender_name'],
                 sender_avatar_url=r['sender_avatar_url'],
-                content=r['content'],
+                content='' if r['is_deleted'] else r['content'],
                 reply_to=reply_to,
                 edited_at=r['edited_at'],
                 is_deleted=r['is_deleted'],
@@ -376,7 +389,7 @@ async def send_message(
     if extra['reply_to_id'] is not None:
         reply_to = ReplyToResponse(
             id=extra['reply_to_id'],
-            content=extra['reply_to_content'],
+            content='' if extra['reply_to_is_deleted'] else extra['reply_to_content'],
             sender_id=extra['reply_to_sender_id'],
             sender_name=extra['reply_to_sender_name'],
             is_deleted=extra['reply_to_is_deleted'],
@@ -397,22 +410,499 @@ async def send_message(
 
     # publish to all participants except the sender, fire off as background task, don't delay response
     asyncio.create_task(
-        _publish_message(
+        _publish_event(
             publish_to=[pid for pid in validation['participant_ids'] if str(pid) != str(user_id)],
-            msg=msg,
+            type='messages:new',
+            payload=msg.model_dump(mode='json'),
         )
     )
 
     return msg
 
 
-async def _publish_message(
+async def _publish_event(
     publish_to: list[UUID],
-    msg: MessageResponse,
-):
+    type: str,
+    payload: dict,
+) -> None:
     for uid in publish_to:
         try:
-            await publish(str(uid), {'user_id': str(uid), 'msg': msg.model_dump(mode='json')})
+            await publish(str(uid), {'user_id': str(uid), 'msg': {'type': type, 'payload': payload}})
         except Exception as _:
             # add proper logging here
             pass
+
+
+async def edit_message(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    chat_id: UUID,
+    message_id: UUID,
+    body: EditMessageRequest,
+) -> EditMessageResponse:
+    try:
+        result = await conn.fetchrow(
+            """
+            WITH updated AS (
+                UPDATE messages
+                SET content = $4, edited_at = NOW()
+                WHERE id = $1 AND chat_id = $2 AND sender_id = $3 AND is_deleted = FALSE
+                RETURNING id, content, edited_at, chat_id
+            )
+            SELECT
+                updated.id,
+                updated.content,
+                updated.edited_at,
+                array_agg(cp.user_id) AS participant_ids
+            FROM updated
+            JOIN chat_participants cp ON cp.chat_id = updated.chat_id
+            GROUP BY updated.id, updated.content, updated.edited_at
+            """,
+            message_id,
+            chat_id,
+            user_id,
+            body.new_content,
+        )
+        if not result:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Message not found')
+    except HTTPException:
+        raise
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to edit message. Please try again later.',
+        )
+
+    asyncio.create_task(
+        _publish_event(
+            publish_to=[pid for pid in result['participant_ids'] if str(pid) != str(user_id)],
+            type='messages:edit',
+            payload={'id': str(result['id']), 'content': result['content'], 'edited_at': result['edited_at'].isoformat()},
+        )
+    )
+
+    return EditMessageResponse(id=result['id'], content=result['content'], edited_at=result['edited_at'])
+
+
+async def delete_message(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    chat_id: UUID,
+    message_id: UUID,
+) -> None:
+    try:
+        result = await conn.fetchrow(
+            """
+            WITH updated AS (
+                UPDATE messages
+                SET is_deleted = TRUE
+                WHERE id = $1 AND chat_id = $2 AND sender_id = $3
+                RETURNING id, chat_id
+            )
+            SELECT
+                updated.id,
+                array_agg(cp.user_id) AS participant_ids
+            FROM updated
+            JOIN chat_participants cp ON cp.chat_id = updated.chat_id
+            GROUP BY updated.id
+            """,
+            message_id,
+            chat_id,
+            user_id,
+        )
+        if not result:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Message not found')
+    except HTTPException:
+        raise
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to delete message. Please try again later.',
+        )
+
+    asyncio.create_task(
+        _publish_event(
+            publish_to=[pid for pid in result['participant_ids'] if str(pid) != str(user_id)],
+            type='messages:delete',
+            payload={'id': str(result['id'])},
+        )
+    )
+
+
+async def get_participants(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    chat_id: UUID,
+    cursor_id: UUID | None,
+    cursor_joined_at: datetime | None,
+) -> list[ChatParticipantResponse]:
+    try:
+        validation = await conn.fetchval(
+            'SELECT 1 FROM chat_participants WHERE chat_id = $1 AND user_id = $2',
+            chat_id,
+            user_id,
+        )
+        if not validation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Chat not found')
+    except HTTPException:
+        raise
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch participants. Please try again later.',
+        )
+
+    conditions = ['cp.chat_id = $1']
+    params = [chat_id]
+    i = 2
+
+    if cursor_joined_at and cursor_id:
+        conditions.append(f'(cp.joined_at, cp.user_id) < (${i}, ${i + 1})')
+        params.extend([cursor_joined_at, cursor_id])
+        i += 2
+
+    where_clause = ' AND '.join(conditions)
+    params.append(CHAT_PARTICIPANTS_PAGE_LIMIT)
+
+    try:
+        rows = await conn.fetch(
+            f"""
+            SELECT
+                u.id,
+                u.name,
+                u.avatar_url,
+                cp.joined_at,
+                (CASE WHEN cp.is_admin THEN 'admin' ELSE 'member' END) AS role
+            FROM chat_participants cp
+            JOIN users u ON u.id = cp.user_id
+            WHERE {where_clause}
+            ORDER BY cp.joined_at DESC, cp.user_id DESC
+            LIMIT ${i}
+            """,
+            *params,
+        )
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch participants. Please try again later.',
+        )
+
+    return [ChatParticipantResponse(**dict(r)) for r in rows]
+
+
+async def add_participants(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    chat_id: UUID,
+    body: AddParticipantsRequest,
+) -> list[ChatParticipantResponse]:
+    new_participant_ids = body.new_participant_ids
+    try:
+        # verify that:
+        #   - the chat exists and the current user is a participant
+        #   - the chat is a group chat
+        #   - the current user is an admin
+        #   - the new participants are connected with the current user
+        validation = await conn.fetchrow(
+            """
+            SELECT
+                cp.is_admin,
+                c.type,
+                (SELECT array_agg(CASE WHEN requesting_id = $2 THEN requested_id ELSE requesting_id END)
+                FROM connections
+                WHERE (requesting_id = $2 OR requested_id = $2) AND status = 'accepted') AS connections
+            FROM chat_participants cp JOIN chats c ON c.id = cp.chat_id
+            WHERE cp.chat_id = $1 AND cp.user_id = $2
+            """,
+            chat_id,
+            user_id,
+        )
+        if not validation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Chat not found')
+        if validation['type'] != 'group':
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Cannot add participants to a DM chat')
+        if not validation['is_admin']:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail='You do not have permission to add participants to this chat',
+            )
+
+        if validation['connections'] is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail='You can only add users with whom you are connected'
+            )
+
+        connected_ids = set(validation['connections'])
+        if any(pid not in connected_ids for pid in new_participant_ids):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail='You can only add users with whom you are connected'
+            )
+
+        # add new participants and return their info in one round trip
+        res = await conn.fetch(
+            """
+            WITH inserted AS (
+                INSERT INTO chat_participants (chat_id, user_id)
+                SELECT $1, unnest($2::uuid[])
+                ON CONFLICT DO NOTHING
+                RETURNING user_id, joined_at, is_admin
+            )
+            SELECT
+                u.id,
+                u.name,
+                u.avatar_url,
+                i.joined_at,
+                (CASE WHEN i.is_admin THEN 'admin' ELSE 'member' END) AS role
+            FROM inserted i JOIN users u ON u.id = i.user_id
+            ORDER BY i.joined_at DESC, i.user_id DESC
+            """,
+            chat_id,
+            new_participant_ids,
+        )
+    except HTTPException:
+        raise
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to add participant. Please try again later.',
+        )
+
+    return [ChatParticipantResponse(**dict(r)) for r in res]
+
+
+async def remove_participant(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    chat_id: UUID,
+    participant_id: UUID,
+) -> None:
+    # prevent users from removing themselves, they should use the leave chat endpoint instead
+    if str(user_id) == str(participant_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='You cannot remove yourself from the chat. Please leave the chat instead.',
+        )
+
+    try:
+        # verify that the current user has permission to remove the participant:
+        #   - the current user must be an admin
+        #   - the user they are trying to remove must not be the owner
+        validation = await conn.fetchrow(
+            """
+            SELECT
+                is_admin,
+                (EXISTS (SELECT 1 FROM chats WHERE id = $1 AND created_by = $3)) AS is_owner
+            FROM chat_participants
+            WHERE chat_id = $1 AND user_id = $2
+            """,
+            chat_id,
+            user_id,
+            participant_id,
+        )
+        if not validation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Chat not found')
+        if not validation['is_admin'] or validation['is_owner']:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail='You cannot remove this participant from the chat'
+            )
+        await conn.execute(
+            'DELETE FROM chat_participants WHERE chat_id = $1 AND user_id = $2',
+            chat_id,
+            participant_id,
+        )
+        return
+    except HTTPException:
+        raise
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to remove participant. Please try again later.',
+        )
+
+
+async def leave_chat(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    chat_id: UUID,
+):
+    try:
+        async with conn.transaction():
+            # if the user is the owner, set created_by to NULL
+            await conn.execute(
+                """
+                UPDATE chats
+                SET created_by = NULL
+                WHERE id = $1 AND created_by = $2
+                """,
+                chat_id,
+                user_id,
+            )
+            # remove the user from chat participants
+            await conn.execute(
+                'DELETE FROM chat_participants WHERE chat_id = $1 AND user_id = $2',
+                chat_id,
+                user_id,
+            )
+        return
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to leave chat. Please try again later.',
+        )
+
+
+async def promote_participant(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    chat_id: UUID,
+    participant_id: UUID,
+):
+    # self-promotion check not necessary - the user can only promote somebody if they are an admin, and if they are
+    # already an admin, then promoting themselves would be a no-op
+    try:
+        # verify that the current user has permission to promote the participant i.e. they must be an admin
+        validation = await conn.fetchrow(
+            """
+            SELECT is_admin
+            FROM chat_participants
+            WHERE chat_id = $1 AND user_id = $2
+            """,
+            chat_id,
+            user_id,
+        )
+        if not validation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Chat not found')
+        if not validation['is_admin']:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail='You cannot make this participant an admin'
+            )
+        await conn.execute(
+            """
+            UPDATE chat_participants
+            SET is_admin = TRUE
+            WHERE chat_id = $1 AND user_id = $2
+            """,
+            chat_id,
+            participant_id,
+        )
+        return
+    except HTTPException:
+        raise
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to make participant an admin. Please try again later.',
+        )
+
+
+async def demote_participant(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    chat_id: UUID,
+    participant_id: UUID,
+):
+    # prevent users from demoting themselves
+    if str(user_id) == str(participant_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='You cannot demote yourself.')
+
+    try:
+        # verify that the current user has permission to demote the participant:
+        #   - they must be an admin
+        #   - the participant they are trying to demote must not be the owner
+        validation = await conn.fetchrow(
+            """
+            SELECT
+                is_admin,
+                (EXISTS (SELECT 1 FROM chats WHERE id = $1 AND created_by = $3)) AS is_owner
+            FROM chat_participants
+            WHERE chat_id = $1 AND user_id = $2
+            """,
+            chat_id,
+            user_id,
+            participant_id,
+        )
+        if not validation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Chat not found')
+        if not validation['is_admin'] or validation['is_owner']:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='You cannot demote this participant.')
+        await conn.execute(
+            """
+            UPDATE chat_participants
+            SET is_admin = FALSE
+            WHERE chat_id = $1 AND user_id = $2
+            """,
+            chat_id,
+            participant_id,
+        )
+        return
+    except HTTPException:
+        raise
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to demote participant. Please try again later.',
+        )
+
+
+async def get_addable_participants(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    chat_id: UUID,
+    user_name: str | None,
+    cursor_id: UUID | None,
+    cursor_name: str | None,
+) -> list[ChatAddableParticipantResponse]:
+    try:
+        # verify that the chat exists, is a group chat, and the user is a participant
+        validation = await conn.fetchrow(
+            """
+            SELECT c.type
+            FROM chat_participants cp JOIN chats c ON c.id = cp.chat_id
+            WHERE cp.chat_id = $1 AND cp.user_id = $2
+            """,
+            chat_id,
+            user_id,
+        )
+        if not validation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Chat not found')
+        if validation['type'] != 'group':
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Cannot add participants to a DM chat')
+
+        # fetch users that the current user is connected with but are not already participants in the chat
+        conditions = [
+            "(c.requesting_id = $2 OR c.requested_id = $2) AND c.status = 'accepted'",
+            'u.id NOT IN (SELECT user_id FROM chat_participants WHERE chat_id = $1)',
+        ]
+        params = [chat_id, user_id]
+        i = 3
+
+        if user_name:
+            conditions.append(f"u.name ILIKE ${i} || '%'")
+            params.append(user_name)
+            i += 1
+
+        if cursor_name and cursor_id:
+            conditions.append(f'(u.name, u.id) > (${i}, ${i + 1})')
+            params.extend([cursor_name, cursor_id])
+            i += 2
+
+        where_clause = ' AND '.join(conditions)
+
+        query = f"""
+            SELECT u.id, u.name, u.avatar_url
+            FROM connections c 
+            JOIN users u ON u.id = (CASE WHEN c.requesting_id = $2 THEN c.requested_id ELSE c.requesting_id END)
+            WHERE {where_clause}
+            ORDER BY u.name ASC, u.id ASC
+            LIMIT ${i}
+        """
+        params.append(CHAT_ADDABLE_PARTICIPANTS_PAGE_LIMIT)
+        rows = await conn.fetch(query, *params)
+        return [ChatAddableParticipantResponse(**dict(r)) for r in rows]
+    except HTTPException:
+        raise
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch addable participants. Please try again later.',
+        )

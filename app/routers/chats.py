@@ -9,6 +9,11 @@ from app.models.chats import (
     ChatResponse,
     MessageResponse,
     SendMessageRequest,
+    EditMessageRequest,
+    EditMessageResponse,
+    ChatParticipantResponse,
+    AddParticipantsRequest,
+    ChatAddableParticipantResponse,
 )
 import app.services.chats as chats_service
 
@@ -67,31 +72,96 @@ async def send_message(
     return await chats_service.send_message(conn, user_id, chat_id, body)
 
 
-@router.patch('/{chat_id}/messages/{message_id}')
-async def edit_message(chat_id: UUID, message_id: UUID):
-    raise NotImplementedError('Editing messages is not implemented yet')
+@router.patch('/{chat_id}/messages/{message_id}', response_model=EditMessageResponse)
+async def edit_message(
+    chat_id: UUID,
+    message_id: UUID,
+    body: EditMessageRequest,
+    user_id: str = Depends(get_current_user),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    return await chats_service.edit_message(conn, user_id, chat_id, message_id, body)
 
 
 @router.delete('/{chat_id}/messages/{message_id}', status_code=status.HTTP_204_NO_CONTENT)
-async def delete_message(chat_id: UUID, message_id: UUID):
-    raise NotImplementedError('Deleting messages is not implemented yet')
+async def delete_message(
+    chat_id: UUID,
+    message_id: UUID,
+    user_id: str = Depends(get_current_user),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    await chats_service.delete_message(conn, user_id, chat_id, message_id)
 
 
-@router.get('/{chat_id}/participants')
-async def get_participants(chat_id: UUID):
-    raise NotImplementedError('Getting chat participants is not implemented yet')
+@router.get('/{chat_id}/participants', response_model=list[ChatParticipantResponse])
+async def get_participants(
+    chat_id: UUID,
+    cursor_id: UUID | None = Query(None),
+    cursor_joined_at: datetime | None = Query(None),
+    user_id: str = Depends(get_current_user),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    return await chats_service.get_participants(conn, user_id, chat_id, cursor_id, cursor_joined_at)
 
 
-@router.post('/{chat_id}/participants', status_code=status.HTTP_201_CREATED)
-async def add_participant(chat_id: UUID):
-    raise NotImplementedError('Adding chat participants is not implemented yet')
+@router.post(
+    '/{chat_id}/participants', response_model=list[ChatParticipantResponse], status_code=status.HTTP_201_CREATED
+)
+async def add_participants(
+    chat_id: UUID,
+    body: AddParticipantsRequest,
+    user_id: str = Depends(get_current_user),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    return await chats_service.add_participants(conn, user_id, chat_id, body)
+
+
+@router.delete('/{chat_id}/participants/me', status_code=status.HTTP_204_NO_CONTENT)
+async def leave_chat(
+    chat_id: UUID,
+    user_id: str = Depends(get_current_user),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    await chats_service.leave_chat(conn, user_id, chat_id)
 
 
 @router.delete('/{chat_id}/participants/{participant_id}', status_code=status.HTTP_204_NO_CONTENT)
-async def remove_participant(chat_id: UUID, participant_id: UUID):
-    raise NotImplementedError('Removing chat participants is not implemented yet')
+async def remove_participant(
+    chat_id: UUID,
+    participant_id: UUID,
+    user_id: str = Depends(get_current_user),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    await chats_service.remove_participant(conn, user_id, chat_id, participant_id)
 
 
-@router.patch('/{chat_id}/participants/{participant_id}')
-async def update_participant(chat_id: UUID, participant_id: UUID):
-    raise NotImplementedError('Updating chat participants is not implemented yet')
+@router.patch('/{chat_id}/participants/{participant_id}/promote', status_code=status.HTTP_204_NO_CONTENT)
+async def promote_participant(
+    chat_id: UUID,
+    participant_id: UUID,
+    user_id: str = Depends(get_current_user),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    await chats_service.promote_participant(conn, user_id, chat_id, participant_id)
+
+
+@router.patch('/{chat_id}/participants/{participant_id}/demote', status_code=status.HTTP_204_NO_CONTENT)
+async def demote_participant(
+    chat_id: UUID,
+    participant_id: UUID,
+    user_id: str = Depends(get_current_user),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    await chats_service.demote_participant(conn, user_id, chat_id, participant_id)
+
+
+@router.get('/{chat_id}/participants/addable', response_model=list[ChatAddableParticipantResponse])
+async def get_addable_participants(
+    chat_id: UUID,
+    user_name: str | None = Query(None),
+    cursor_id: UUID | None = Query(None),
+    cursor_name: str | None = Query(None),
+    user_id: str = Depends(get_current_user),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    return await chats_service.get_addable_participants(conn, user_id, chat_id, user_name, cursor_id, cursor_name)

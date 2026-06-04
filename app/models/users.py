@@ -19,15 +19,14 @@ class UserResponse(BaseModel):
 
 class UserProfileResponse(UserResponse):
     created_at: datetime
-    connection_status: (
-        Literal["pending_incoming", "pending_outgoing", "connected", "blocked"] | None
-    ) = None
+    connection_status: Literal['pending_incoming', 'pending_outgoing', 'connected', 'blocked'] | None = None
 
 
+# TODO: The CommunityMemberResponse model contains fields not required/used by the frontend, can be trimmed
 class CommunityMemberResponse(UserResponse):
     created_at: datetime
     joined_at: datetime
-    role: Literal["admin", "member"] = Field(default="member")
+    role: Literal['admin', 'member'] = Field(default='member')
 
 
 class UserStatsResponse(BaseModel):

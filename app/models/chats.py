@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from uuid import UUID
 from datetime import datetime
 from typing import Literal
+from app.config.constants import MAX_NAME_LENGTH
 
 
 class LastMessageResponse(BaseModel):
@@ -53,6 +54,24 @@ class SendMessageRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=2000)
     reply_to_id: UUID | None = None
 
+    @field_validator('content', mode='before')
+    def validate_content(cls, content: str):
+        return content.strip()
+
+
+class EditMessageRequest(BaseModel):
+    new_content: str = Field(..., min_length=1, max_length=2000)
+
+    @field_validator('new_content', mode='before')
+    def validate_content(cls, new_content: str):
+        return new_content.strip()
+
+
+class EditMessageResponse(BaseModel):
+    id: UUID
+    content: str
+    edited_at: datetime
+
 
 class CreateChatRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=100)
@@ -75,3 +94,25 @@ class CreateChatRequest(BaseModel):
         if len(self.participant_ids) == 1 and self.name is not None:
             raise ValueError('DM chats cannot have a name')
         return self
+
+
+class ChatParticipantResponse(BaseModel):
+    id: UUID
+    name: str = Field(max_length=MAX_NAME_LENGTH)
+    avatar_url: str | None = None
+    joined_at: datetime
+    role: Literal['admin', 'member'] = Field(default='member')
+
+
+class AddParticipantsRequest(BaseModel):
+    new_participant_ids: list[UUID] = Field(..., min_length=1)
+
+    @field_validator('new_participant_ids', mode='before')
+    def deduplicate_participant_ids(cls, new_participant_ids: list[UUID]):
+        return list(set(new_participant_ids))
+
+
+class ChatAddableParticipantResponse(BaseModel):
+    id: UUID
+    name: str = Field(max_length=MAX_NAME_LENGTH)
+    avatar_url: str | None = None
