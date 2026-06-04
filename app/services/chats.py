@@ -427,7 +427,7 @@ async def _publish_event(
 ) -> None:
     for uid in publish_to:
         try:
-            await publish(str(uid), {'user_id': str(uid), 'msg': {'type': type, 'payload': payload}})
+            await publish(str(uid), {'user_id': str(uid), 'event_data': {'type': type, 'payload': payload}})
         except Exception as _:
             # add proper logging here
             pass
@@ -477,7 +477,11 @@ async def edit_message(
         _publish_event(
             publish_to=[pid for pid in result['participant_ids'] if str(pid) != str(user_id)],
             type='messages:edit',
-            payload={'id': str(result['id']), 'content': result['content'], 'edited_at': result['edited_at'].isoformat()},
+            payload={
+                'id': str(result['id']),
+                'content': result['content'],
+                'edited_at': result['edited_at'].isoformat(),
+            },
         )
     )
 
@@ -726,23 +730,29 @@ async def leave_chat(
     chat_id: UUID,
 ):
     try:
-        async with conn.transaction():
-            # if the user is the owner, set created_by to NULL
-            await conn.execute(
-                """
+        await conn.execute(
+            """
+            WITH clear_owner AS (
                 UPDATE chats
                 SET created_by = NULL
                 WHERE id = $1 AND created_by = $2
-                """,
-                chat_id,
-                user_id,
+            ),
+            remove_participant AS (
+                DELETE FROM chat_participants
+                WHERE chat_id = $1 AND user_id = $2
+                RETURNING chat_id
+            ),
+            remaining_participants AS (
+                SELECT COUNT(*) AS count
+                FROM chat_participants
+                WHERE chat_id = $1 AND user_id != $2
             )
-            # remove the user from chat participants
-            await conn.execute(
-                'DELETE FROM chat_participants WHERE chat_id = $1 AND user_id = $2',
-                chat_id,
-                user_id,
-            )
+            DELETE FROM chats
+            WHERE id = $1 AND (SELECT count FROM remaining_participants) = 0
+            """,
+            chat_id,
+            user_id,
+        )
         return
     except Exception as _:
         raise HTTPException(

@@ -30,6 +30,8 @@ async def get_chat_previews(
     user_id: str = Depends(get_current_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
+    # TODO: Support filtering by chat name, bearing in mind that for group chats, the name is the given name, but
+    # for 1:1 chats, the name is the other participant's name, probably use a CASE statement or a CTE to unify this
     return await chats_service.get_chat_previews(conn, user_id, cursor_id, cursor_updated_at)
 
 
@@ -49,6 +51,11 @@ async def get_chat_preview(
     conn: asyncpg.Connection = Depends(get_db),
 ):
     return await chats_service.get_chat_preview(conn, user_id, chat_id)
+
+
+# TODO: when a user opens a chat, update last_read_at in chat_participants and publish a chats:read event
+# over the same pubsub channel so other tabs/devices for the same user can sync their unread state.
+# unread indicator can then be derived from chat.updated_at > last_read_at in the chat preview query.
 
 
 @router.get('/{chat_id}/messages', response_model=list[MessageResponse])

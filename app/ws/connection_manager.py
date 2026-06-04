@@ -15,7 +15,7 @@ async def connect(user_id: str, connection_id: str, ws: WebSocket):
             active_connections[user_id][connection_id] = ws
         else:
             active_connections[user_id] = {connection_id: ws}
-            await get_pubsub().subscribe(**{f'messages:{user_id}': handle_msg})
+            await get_pubsub().subscribe(**{f'messages:{user_id}': handle_event})
 
 
 async def disconnect(user_id: str, connection_id: str):
@@ -30,24 +30,24 @@ async def disconnect(user_id: str, connection_id: str):
             await get_pubsub().unsubscribe(f'messages:{user_id}')
 
 
-async def handle_msg(msg: dict):
+async def handle_event(msg: dict):
     # msg is a dict with keys: type, channel, data
     # the handler is only called with type 'message' because we set ignore_subscribe_messages=True
     try:
-        data = json.loads(msg['data'])
+        data = json.loads(msg['data'])  # data contains the actual payload we published
     except json.JSONDecodeError:
-        # failed to decode message
+        # failed to decode event
         return
 
-    # broadcast the message to all active connections for the user
+    # broadcast the event to all active connections for the user
     user_ws_dict = active_connections.get(data['user_id'])
     if user_ws_dict:
         # capture a snapshot of active connections for the user, prevents runtime errors
-        # in case it changes while we're broadcasting
+        # in case it changes mid-loop while we're broadcasting
         user_ws = list(user_ws_dict.values())
         for ws in user_ws:
             try:
-                await ws.send_json(data['msg'])
+                await ws.send_json(data['event_data'])
             except Exception as _:
-                # an error may occur if a message arrives between WebSocket closure and disconnect being called
+                # an error may occur if an event arrives between WebSocket closure and disconnect being called
                 pass
