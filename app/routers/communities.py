@@ -303,11 +303,19 @@ async def get_single_conversation(
 )
 async def get_conversation_messages(
     conversation_id: str,
+    cursor_id: str | None = Query(None),
+    cursor_created_at: datetime | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
     try:
-        records = await list_messages(conn, UUID(conversation_id), UUID(user_id))
+        records = await list_messages(
+            conn,
+            UUID(conversation_id),
+            UUID(user_id),
+            cursor_id=UUID(cursor_id) if cursor_id else None,
+            cursor_created_at=cursor_created_at,
+        )
         return [record_to_message(r) for r in records]
     except HTTPException:
         raise

@@ -3,7 +3,7 @@ from fastapi import HTTPException, status
 from uuid import UUID
 import asyncpg
 
-from app.config.constants import CONVERSATIONS_PAGE_LIMIT
+from app.config.constants import CONVERSATIONS_PAGE_LIMIT, MESSAGES_PAGE_LIMIT
 from app.models.communities import (
     AuthorInfo,
     ConversationResponse,
@@ -100,7 +100,19 @@ async def list_messages(
     conn: asyncpg.Connection,
     conversation_id: UUID,
     user_id: UUID,
+    cursor_id: UUID | None = None,
+    cursor_created_at: datetime | None = None,
 ) -> list[asyncpg.Record]:
+    conditions = ["m.conversation_id = $1"]
+    params: list = [conversation_id, user_id]
+    i = 3
+
+    if cursor_created_at and cursor_id:
+        conditions.append(f"(m.created_at, m.id) > (${i}, ${i + 1})")
+        params.extend([cursor_created_at, cursor_id])
+        i += 2
+
+    where_clause = " AND ".join(conditions)
     query = f"""
         SELECT
             {_MESSAGE_COLS},
@@ -110,10 +122,12 @@ async def list_messages(
             ) AS is_hearted
         FROM conversation_messages m
         LEFT JOIN public.users u ON u.id = m.author_id
-        WHERE m.conversation_id = $1
-        ORDER BY m.created_at ASC
+        WHERE {where_clause}
+        ORDER BY m.created_at ASC, m.id ASC
+        LIMIT ${i}
     """
-    return await conn.fetch(query, conversation_id, user_id)
+    params.append(MESSAGES_PAGE_LIMIT)
+    return await conn.fetch(query, *params)
 
 
 async def list_participants(
