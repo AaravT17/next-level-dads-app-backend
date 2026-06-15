@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from app.routers.auth import router as auth_router
 from app.routers.users import router as users_router
 from app.routers.interests import router as interests_router
-from app.routers.communities import router as communities_router
+from app.routers.communities import router as communities_router, conversations_router, messages_router
 from app.routers.events import router as events_router
 from app.routers.connections import router as connections_router
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,5 +46,7 @@ app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(interests_router)
 app.include_router(communities_router)
+app.include_router(conversations_router)
+app.include_router(messages_router)
 app.include_router(events_router)
 app.include_router(connections_router)
