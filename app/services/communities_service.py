@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from fastapi import HTTPException, status
 from uuid import UUID
 import asyncpg
@@ -29,6 +30,14 @@ _CONVERSATION_COLS = """
     (SELECT COUNT(*) FROM conversation_participants cp WHERE cp.conversation_id = c.id) AS participant_count
 """
 
+_TIME_WINDOW_SQL: dict[str, str] = {
+    'today': "AND c.last_activity_at >= NOW() - INTERVAL '1 day'",
+    'week':  "AND c.last_activity_at >= NOW() - INTERVAL '7 days'",
+    'month': "AND c.last_activity_at >= NOW() - INTERVAL '30 days'",
+    'year':  "AND c.last_activity_at >= NOW() - INTERVAL '365 days'",
+    'all':   '',
+}
+
 _MESSAGE_COLS = """
     m.id,
     m.conversation_id,
@@ -47,30 +56,55 @@ async def list_conversations(
     conn: asyncpg.Connection,
     community_id: UUID,
     user_id: UUID,
+    sort: Literal['recent', 'popular', 'active'] = 'recent',
+    time_window: Literal['today', 'week', 'month', 'year', 'all'] = 'all',
     cursor_id: UUID | None = None,
     cursor_last_activity_at: datetime | None = None,
+    cursor_heart_count: int | None = None,
+    cursor_reply_count: int | None = None,
 ) -> list[asyncpg.Record]:
-    conditions = ["c.community_id = $1"]
     params: list = [community_id, user_id]
     i = 3
 
-    if cursor_last_activity_at and cursor_id:
-        conditions.append(f"(c.last_activity_at, c.id) < (${i}, ${i + 1})")
+    time_filter = _TIME_WINDOW_SQL[time_window]
+
+    cursor_condition = ''
+    if sort == 'recent' and cursor_last_activity_at and cursor_id:
+        cursor_condition = f'WHERE (last_activity_at, id) < (${i}, ${i + 1})'
         params.extend([cursor_last_activity_at, cursor_id])
         i += 2
+    elif sort == 'popular' and cursor_heart_count is not None and cursor_id:
+        cursor_condition = f'WHERE (heart_count, id) < (${i}, ${i + 1})'
+        params.extend([cursor_heart_count, cursor_id])
+        i += 2
+    elif sort == 'active' and cursor_reply_count is not None and cursor_id:
+        cursor_condition = f'WHERE (reply_count, id) < (${i}, ${i + 1})'
+        params.extend([cursor_reply_count, cursor_id])
+        i += 2
 
-    where_clause = " AND ".join(conditions)
+    if sort == 'popular':
+        order_by = 'heart_count DESC, id DESC'
+    elif sort == 'active':
+        order_by = 'reply_count DESC, id DESC'
+    else:
+        order_by = 'last_activity_at DESC, id DESC'
+
     query = f"""
-        SELECT
-            {_CONVERSATION_COLS},
-            EXISTS (
-                SELECT 1 FROM conversation_hearts ch
-                WHERE ch.conversation_id = c.id AND ch.user_id = $2
-            ) AS is_hearted
-        FROM conversations c
-        LEFT JOIN public.users u ON u.id = c.author_id
-        WHERE {where_clause}
-        ORDER BY c.last_activity_at DESC, c.id DESC
+        WITH convs AS (
+            SELECT
+                {_CONVERSATION_COLS},
+                EXISTS (
+                    SELECT 1 FROM conversation_hearts ch
+                    WHERE ch.conversation_id = c.id AND ch.user_id = $2
+                ) AS is_hearted
+            FROM conversations c
+            LEFT JOIN public.users u ON u.id = c.author_id
+            WHERE c.community_id = $1
+            {time_filter}
+        )
+        SELECT * FROM convs
+        {cursor_condition}
+        ORDER BY {order_by}
         LIMIT ${i}
     """
     params.append(CONVERSATIONS_PAGE_LIMIT)

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
+from typing import Literal
 from app.dependencies.auth import get_current_user
 from app.models.communities import CommunityResponse
 from app.models.users import CommunityMemberResponse
@@ -209,8 +210,12 @@ async def leave_community(
 @router.get("/{community_id}/conversations", response_model=list[ConversationResponse])
 async def get_community_conversations(
     community_id: str,
+    sort: Literal['recent', 'popular', 'active'] = Query('recent'),
+    time_window: Literal['today', 'week', 'month', 'year', 'all'] = Query('all'),
     cursor_id: str | None = Query(None),
     cursor_last_activity_at: datetime | None = Query(None),
+    cursor_heart_count: int | None = Query(None),
+    cursor_reply_count: int | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
@@ -219,8 +224,12 @@ async def get_community_conversations(
             conn,
             UUID(community_id),
             UUID(user_id),
+            sort=sort,
+            time_window=time_window,
             cursor_id=UUID(cursor_id) if cursor_id else None,
             cursor_last_activity_at=cursor_last_activity_at,
+            cursor_heart_count=cursor_heart_count,
+            cursor_reply_count=cursor_reply_count,
         )
         return [record_to_conversation(r) for r in records]
     except HTTPException:
