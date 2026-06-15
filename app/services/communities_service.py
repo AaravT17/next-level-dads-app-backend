@@ -4,12 +4,13 @@ from fastapi import HTTPException, status
 from uuid import UUID
 import asyncpg
 
-from app.config.constants import CONVERSATIONS_PAGE_LIMIT, MESSAGES_PAGE_LIMIT
+from app.config.constants import CONVERSATIONS_PAGE_LIMIT, MESSAGES_PAGE_LIMIT, REPLIES_PAGE_LIMIT
 from app.models.communities import (
     AuthorInfo,
     ConversationResponse,
     MessageResponse,
     ParticipantResponse,
+    ReplyResponse,
 )
 
 _CONVERSATION_COLS = """
@@ -25,7 +26,9 @@ _CONVERSATION_COLS = """
     u.name      AS author_name,
     u.avatar_url AS author_avatar_url,
     u.about     AS author_about,
-    (SELECT COUNT(*) FROM conversation_messages cm  WHERE cm.conversation_id  = c.id) AS reply_count,
+    (SELECT COUNT(*) FROM conversation_messages cm WHERE cm.conversation_id = c.id)
+    + (SELECT COUNT(*) FROM message_replies mr JOIN conversation_messages cm ON mr.message_id = cm.id WHERE cm.conversation_id = c.id)
+    AS reply_count,
     (SELECT COUNT(*) FROM conversation_hearts   ch  WHERE ch.conversation_id  = c.id) AS heart_count,
     (SELECT COUNT(*) FROM conversation_participants cp WHERE cp.conversation_id = c.id) AS participant_count
 """
@@ -48,7 +51,21 @@ _MESSAGE_COLS = """
     u.name       AS author_name,
     u.avatar_url  AS author_avatar_url,
     u.about      AS author_about,
-    (SELECT COUNT(*) FROM message_hearts mh WHERE mh.message_id = m.id) AS heart_count
+    (SELECT COUNT(*) FROM message_hearts mh WHERE mh.message_id = m.id) AS heart_count,
+    (SELECT COUNT(*) FROM message_replies mr WHERE mr.message_id = m.id) AS reply_count
+"""
+
+_REPLY_COLS = """
+    r.id,
+    r.message_id,
+    r.body,
+    r.created_at,
+    r.updated_at,
+    u.id         AS author_id,
+    u.name       AS author_name,
+    u.avatar_url  AS author_avatar_url,
+    u.about      AS author_about,
+    (SELECT COUNT(*) FROM reply_hearts rh WHERE rh.reply_id = r.id) AS heart_count
 """
 
 
@@ -330,6 +347,20 @@ def record_to_message(record: asyncpg.Record) -> MessageResponse:
         conversation_id=record["conversation_id"],
         author=_author(record),
         body=record["body"],
+        reply_count=record["reply_count"],
+        heart_count=record["heart_count"],
+        is_hearted=record["is_hearted"],
+        created_at=record["created_at"],
+        updated_at=record["updated_at"],
+    )
+
+
+def record_to_reply(record: asyncpg.Record) -> ReplyResponse:
+    return ReplyResponse(
+        id=record["id"],
+        message_id=record["message_id"],
+        author=_author(record),
+        body=record["body"],
         heart_count=record["heart_count"],
         is_hearted=record["is_hearted"],
         created_at=record["created_at"],
@@ -345,6 +376,120 @@ def record_to_participant(record: asyncpg.Record) -> ParticipantResponse:
         first_joined_at=record["first_joined_at"],
         last_active_at=record["last_active_at"],
     )
+
+
+async def list_replies(
+    conn: asyncpg.Connection,
+    message_id: UUID,
+    user_id: UUID,
+    cursor_id: UUID | None = None,
+    cursor_heart_count: int | None = None,
+) -> list[asyncpg.Record]:
+    params: list = [message_id, user_id]
+    i = 3
+
+    cursor_condition = ''
+    if cursor_heart_count is not None and cursor_id:
+        cursor_condition = f'WHERE (heart_count, id) < (${i}, ${i + 1})'
+        params.extend([cursor_heart_count, cursor_id])
+        i += 2
+
+    query = f"""
+        WITH ranked AS (
+            SELECT
+                {_REPLY_COLS},
+                EXISTS (
+                    SELECT 1 FROM reply_hearts rh
+                    WHERE rh.reply_id = r.id AND rh.user_id = $2
+                ) AS is_hearted
+            FROM message_replies r
+            LEFT JOIN public.users u ON u.id = r.author_id
+            WHERE r.message_id = $1
+        )
+        SELECT * FROM ranked
+        {cursor_condition}
+        ORDER BY heart_count DESC, id DESC
+        LIMIT ${i}
+    """
+    params.append(REPLIES_PAGE_LIMIT)
+    return await conn.fetch(query, *params)
+
+
+async def insert_reply(
+    conn: asyncpg.Connection,
+    message_id: UUID,
+    author_id: UUID,
+    body: str,
+) -> asyncpg.Record:
+    query = """
+        INSERT INTO message_replies (message_id, author_id, body)
+        VALUES ($1, $2, $3)
+        RETURNING id
+    """
+    return await conn.fetchrow(query, message_id, author_id, body)
+
+
+async def heart_reply(
+    conn: asyncpg.Connection,
+    reply_id: UUID,
+    user_id: UUID,
+) -> None:
+    await conn.execute(
+        """
+        INSERT INTO reply_hearts (reply_id, user_id)
+        VALUES ($1, $2)
+        ON CONFLICT DO NOTHING
+        """,
+        reply_id,
+        user_id,
+    )
+
+
+async def unheart_reply(
+    conn: asyncpg.Connection,
+    reply_id: UUID,
+    user_id: UUID,
+) -> None:
+    await conn.execute(
+        "DELETE FROM reply_hearts WHERE reply_id = $1 AND user_id = $2",
+        reply_id,
+        user_id,
+    )
+
+
+async def reply_to_message(
+    conn: asyncpg.Connection,
+    message_id: UUID,
+    author_id: UUID,
+    body: str,
+) -> ReplyResponse:
+    exists = await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM conversation_messages WHERE id = $1)", message_id
+    )
+    if not exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found.",
+        )
+
+    row = await insert_reply(conn, message_id, author_id, body)
+    record = await conn.fetchrow(
+        f"""
+        SELECT
+            {_REPLY_COLS},
+            FALSE AS is_hearted
+        FROM message_replies r
+        LEFT JOIN public.users u ON u.id = r.author_id
+        WHERE r.id = $1
+        """,
+        row["id"],
+    )
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch created reply.",
+        )
+    return record_to_reply(record)
 
 
 async def start_conversation(

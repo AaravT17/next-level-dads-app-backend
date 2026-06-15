@@ -65,6 +65,22 @@ class MessageResponse(BaseModel):
     conversation_id: UUID
     author: AuthorInfo | None = None
     body: str
+    reply_count: int = 0
+    heart_count: int = 0
+    is_hearted: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReplyCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=CONVERSATION_BODY_MAX_LENGTH)
+
+
+class ReplyResponse(BaseModel):
+    id: UUID
+    message_id: UUID
+    author: AuthorInfo | None = None
+    body: str
     heart_count: int = 0
     is_hearted: bool = False
     created_at: datetime

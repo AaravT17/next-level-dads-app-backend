@@ -16,21 +16,28 @@ from app.models.communities import (
     MessageCreate,
     MessageResponse,
     ParticipantResponse,
+    ReplyCreate,
+    ReplyResponse,
 )
 from app.services.communities_service import (
     list_conversations,
     get_conversation,
     list_messages,
     list_participants,
+    list_replies,
     heart_conversation,
     unheart_conversation,
     heart_message,
     unheart_message,
+    heart_reply,
+    unheart_reply,
     start_conversation,
     reply_to_conversation,
+    reply_to_message,
     record_to_conversation,
     record_to_message,
     record_to_participant,
+    record_to_reply,
 )
 from uuid import UUID
 from datetime import datetime
@@ -470,4 +477,102 @@ async def unheart_a_message(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to unheart message. Please try again later.",
+        )
+
+
+@messages_router.get("/{message_id}/replies", response_model=list[ReplyResponse])
+async def get_message_replies(
+    message_id: str,
+    cursor_id: str | None = Query(None),
+    cursor_heart_count: int | None = Query(None),
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        records = await list_replies(
+            conn,
+            UUID(message_id),
+            UUID(user_id),
+            cursor_id=UUID(cursor_id) if cursor_id else None,
+            cursor_heart_count=cursor_heart_count,
+        )
+        return [record_to_reply(r) for r in records]
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch replies. Please try again later.",
+        )
+
+
+@messages_router.post(
+    "/{message_id}/replies",
+    response_model=ReplyResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_reply(
+    message_id: str,
+    payload: ReplyCreate,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        return await reply_to_message(conn, UUID(message_id), UUID(user_id), payload.body)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to post reply. Please try again later.",
+        )
+
+
+# ── Reply-scoped router ────────────────────────────────────────────────────
+
+replies_router = APIRouter(
+    prefix="/api/replies",
+    tags=["replies"],
+)
+
+
+@replies_router.post("/{reply_id}/heart", status_code=status.HTTP_204_NO_CONTENT)
+async def heart_a_reply(
+    reply_id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        await heart_reply(conn, UUID(reply_id), UUID(user_id))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to heart reply. Please try again later.",
+        )
+
+
+@replies_router.delete("/{reply_id}/heart", status_code=status.HTTP_204_NO_CONTENT)
+async def unheart_a_reply(
+    reply_id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        await unheart_reply(conn, UUID(reply_id), UUID(user_id))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to unheart reply. Please try again later.",
         )
