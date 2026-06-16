@@ -13,12 +13,17 @@ from app.models.communities import (
     ReplyResponse,
 )
 
+REMOVED_CONVERSATION_TITLE = "Removed post"
+REMOVED_BY_ORIGINAL_POSTER = "Removed by original poster."
+
 _CONVERSATION_COLS = """
     c.id,
     c.community_id,
     c.title,
     c.body,
     c.prompt_type,
+    c.is_deleted,
+    c.deleted_at,
     c.created_at,
     c.updated_at,
     c.last_activity_at,
@@ -26,8 +31,29 @@ _CONVERSATION_COLS = """
     u.name      AS author_name,
     u.avatar_url AS author_avatar_url,
     u.about     AS author_about,
-    (SELECT COUNT(*) FROM conversation_messages cm WHERE cm.conversation_id = c.id AND NOT cm.is_deleted)
-    + (SELECT COUNT(*) FROM message_replies mr JOIN conversation_messages cm ON mr.message_id = cm.id WHERE cm.conversation_id = c.id AND NOT mr.is_deleted AND NOT cm.is_deleted)
+    (
+        SELECT COUNT(*)
+        FROM conversation_messages cm
+        WHERE cm.conversation_id = c.id
+        AND NOT EXISTS (
+            SELECT 1 FROM moderation_filtered_messages mfm
+            WHERE mfm.content_type = 'message' AND mfm.content_id = cm.id
+        )
+    )
+    + (
+        SELECT COUNT(*)
+        FROM message_replies mr
+        JOIN conversation_messages cm ON mr.message_id = cm.id
+        WHERE cm.conversation_id = c.id
+        AND NOT EXISTS (
+            SELECT 1 FROM moderation_filtered_messages mfm
+            WHERE mfm.content_type = 'message' AND mfm.content_id = cm.id
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM moderation_filtered_messages mfm
+            WHERE mfm.content_type = 'reply' AND mfm.content_id = mr.id
+        )
+    )
     AS reply_count,
     (SELECT COUNT(*) FROM conversation_hearts   ch  WHERE ch.conversation_id  = c.id) AS heart_count,
     (SELECT COUNT(*) FROM conversation_participants cp WHERE cp.conversation_id = c.id) AS participant_count
@@ -45,6 +71,8 @@ _MESSAGE_COLS = """
     m.id,
     m.conversation_id,
     m.body,
+    m.is_deleted,
+    m.deleted_at,
     m.created_at,
     m.updated_at,
     u.id         AS author_id,
@@ -52,13 +80,23 @@ _MESSAGE_COLS = """
     u.avatar_url  AS author_avatar_url,
     u.about      AS author_about,
     (SELECT COUNT(*) FROM message_hearts mh WHERE mh.message_id = m.id) AS heart_count,
-    (SELECT COUNT(*) FROM message_replies mr WHERE mr.message_id = m.id AND NOT mr.is_deleted) AS reply_count
+    (
+        SELECT COUNT(*)
+        FROM message_replies mr
+        WHERE mr.message_id = m.id
+        AND NOT EXISTS (
+            SELECT 1 FROM moderation_filtered_messages mfm
+            WHERE mfm.content_type = 'reply' AND mfm.content_id = mr.id
+        )
+    ) AS reply_count
 """
 
 _REPLY_COLS = """
     r.id,
     r.message_id,
     r.body,
+    r.is_deleted,
+    r.deleted_at,
     r.created_at,
     r.updated_at,
     u.id         AS author_id,
@@ -117,7 +155,10 @@ async def list_conversations(
             FROM conversations c
             LEFT JOIN public.users u ON u.id = c.author_id
             WHERE c.community_id = $1
-            AND NOT c.is_deleted
+            AND NOT EXISTS (
+                SELECT 1 FROM moderation_filtered_messages mfm
+                WHERE mfm.content_type = 'conversation' AND mfm.content_id = c.id
+            )
             {time_filter}
         )
         SELECT * FROM convs
@@ -143,7 +184,11 @@ async def get_conversation(
             ) AS is_hearted
         FROM conversations c
         LEFT JOIN public.users u ON u.id = c.author_id
-        WHERE c.id = $1 AND NOT c.is_deleted
+        WHERE c.id = $1
+        AND NOT EXISTS (
+            SELECT 1 FROM moderation_filtered_messages mfm
+            WHERE mfm.content_type = 'conversation' AND mfm.content_id = c.id
+        )
     """
     return await conn.fetchrow(query, conversation_id, user_id)
 
@@ -155,7 +200,15 @@ async def list_messages(
     cursor_id: UUID | None = None,
     cursor_created_at: datetime | None = None,
 ) -> list[asyncpg.Record]:
-    conditions = ["m.conversation_id = $1", "NOT m.is_deleted"]
+    conditions = [
+        "m.conversation_id = $1",
+        """
+        NOT EXISTS (
+            SELECT 1 FROM moderation_filtered_messages mfm
+            WHERE mfm.content_type = 'message' AND mfm.content_id = m.id
+        )
+        """,
+    ]
     params: list = [conversation_id, user_id]
     i = 3
 
@@ -341,6 +394,72 @@ async def unheart_message(
     )
 
 
+async def _soft_delete_owned_content(
+    conn: asyncpg.Connection,
+    table: str,
+    content_id: UUID,
+    user_id: UUID,
+    label: str,
+) -> None:
+    record = await conn.fetchrow(
+        f"SELECT author_id, is_deleted FROM {table} WHERE id = $1",
+        content_id,
+    )
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{label} not found.",
+        )
+    if record["author_id"] != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"You can only delete your own {label.lower()}.",
+        )
+    if record["is_deleted"]:
+        return
+
+    await conn.execute(
+        f"""
+        UPDATE {table}
+        SET is_deleted = TRUE,
+            deleted_at = NOW(),
+            updated_at = NOW()
+        WHERE id = $1
+        """,
+        content_id,
+    )
+
+
+async def delete_conversation(
+    conn: asyncpg.Connection,
+    conversation_id: UUID,
+    user_id: UUID,
+) -> None:
+    await _soft_delete_owned_content(
+        conn, "conversations", conversation_id, user_id, "Conversation"
+    )
+
+
+async def delete_message(
+    conn: asyncpg.Connection,
+    message_id: UUID,
+    user_id: UUID,
+) -> None:
+    await _soft_delete_owned_content(
+        conn, "conversation_messages", message_id, user_id, "Message"
+    )
+
+
+async def delete_reply(
+    conn: asyncpg.Connection,
+    reply_id: UUID,
+    user_id: UUID,
+) -> None:
+    await _soft_delete_owned_content(
+        conn, "message_replies", reply_id, user_id, "Reply"
+    )
+
+
 def _author(record: asyncpg.Record) -> AuthorInfo | None:
     if record["author_id"] is None:
         return None
@@ -353,17 +472,20 @@ def _author(record: asyncpg.Record) -> AuthorInfo | None:
 
 
 def record_to_conversation(record: asyncpg.Record) -> ConversationResponse:
+    is_deleted = record["is_deleted"]
     return ConversationResponse(
         id=record["id"],
         community_id=record["community_id"],
         author=_author(record),
-        title=record["title"],
-        body=record["body"],
+        title=REMOVED_CONVERSATION_TITLE if is_deleted else record["title"],
+        body=REMOVED_BY_ORIGINAL_POSTER if is_deleted else record["body"],
         prompt_type=record["prompt_type"],
         reply_count=record["reply_count"],
         heart_count=record["heart_count"],
         participant_count=record["participant_count"],
         is_hearted=record["is_hearted"],
+        is_deleted=is_deleted,
+        deleted_at=record["deleted_at"],
         created_at=record["created_at"],
         updated_at=record["updated_at"],
         last_activity_at=record["last_activity_at"],
@@ -371,27 +493,33 @@ def record_to_conversation(record: asyncpg.Record) -> ConversationResponse:
 
 
 def record_to_message(record: asyncpg.Record) -> MessageResponse:
+    is_deleted = record["is_deleted"]
     return MessageResponse(
         id=record["id"],
         conversation_id=record["conversation_id"],
         author=_author(record),
-        body=record["body"],
+        body=REMOVED_BY_ORIGINAL_POSTER if is_deleted else record["body"],
         reply_count=record["reply_count"],
         heart_count=record["heart_count"],
         is_hearted=record["is_hearted"],
+        is_deleted=is_deleted,
+        deleted_at=record["deleted_at"],
         created_at=record["created_at"],
         updated_at=record["updated_at"],
     )
 
 
 def record_to_reply(record: asyncpg.Record) -> ReplyResponse:
+    is_deleted = record["is_deleted"]
     return ReplyResponse(
         id=record["id"],
         message_id=record["message_id"],
         author=_author(record),
-        body=record["body"],
+        body=REMOVED_BY_ORIGINAL_POSTER if is_deleted else record["body"],
         heart_count=record["heart_count"],
         is_hearted=record["is_hearted"],
+        is_deleted=is_deleted,
+        deleted_at=record["deleted_at"],
         created_at=record["created_at"],
         updated_at=record["updated_at"],
     )
@@ -433,7 +561,11 @@ async def list_replies(
                 ) AS is_hearted
             FROM message_replies r
             LEFT JOIN public.users u ON u.id = r.author_id
-            WHERE r.message_id = $1 AND NOT r.is_deleted
+            WHERE r.message_id = $1
+            AND NOT EXISTS (
+                SELECT 1 FROM moderation_filtered_messages mfm
+                WHERE mfm.content_type = 'reply' AND mfm.content_id = r.id
+            )
         )
         SELECT * FROM ranked
         {cursor_condition}

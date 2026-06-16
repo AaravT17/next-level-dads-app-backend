@@ -33,6 +33,9 @@ from app.services.communities_service import (
     unheart_message,
     heart_reply,
     unheart_reply,
+    delete_conversation,
+    delete_message,
+    delete_reply,
     start_conversation,
     reply_to_conversation,
     reply_to_message,
@@ -326,6 +329,27 @@ async def get_single_conversation(
         )
 
 
+@conversations_router.delete(
+    "/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_a_conversation(
+    conversation_id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        await delete_conversation(conn, UUID(conversation_id), UUID(user_id))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete conversation. Please try again later.",
+        )
+
+
 @conversations_router.get(
     "/{conversation_id}/messages", response_model=list[MessageResponse]
 )
@@ -487,6 +511,25 @@ async def heart_a_message(
         )
 
 
+@messages_router.delete("/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_a_message(
+    message_id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        await delete_message(conn, UUID(message_id), UUID(user_id))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete message. Please try again later.",
+        )
+
+
 @messages_router.delete("/{message_id}/heart", status_code=status.HTTP_204_NO_CONTENT)
 async def unheart_a_message(
     message_id: str,
@@ -596,6 +639,25 @@ async def heart_a_reply(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to heart reply. Please try again later.",
+        )
+
+
+@replies_router.delete("/{reply_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_a_reply(
+    reply_id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        await delete_reply(conn, UUID(reply_id), UUID(user_id))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete reply. Please try again later.",
         )
 
 

@@ -51,6 +51,8 @@ class ConversationResponse(BaseModel):
     heart_count: int = 0
     participant_count: int = 0
     is_hearted: bool = False
+    is_deleted: bool = False
+    deleted_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     last_activity_at: datetime
@@ -68,6 +70,8 @@ class MessageResponse(BaseModel):
     reply_count: int = 0
     heart_count: int = 0
     is_hearted: bool = False
+    is_deleted: bool = False
+    deleted_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -83,6 +87,8 @@ class ReplyResponse(BaseModel):
     body: str
     heart_count: int = 0
     is_hearted: bool = False
+    is_deleted: bool = False
+    deleted_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
