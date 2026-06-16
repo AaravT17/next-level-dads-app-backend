@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Query, Body
 from typing import Literal
 from app.dependencies.auth import get_current_user
 from app.models.communities import CommunityResponse
 from app.models.users import CommunityMemberResponse
-from app.dependencies.db import get_db
+from app.dependencies.db import get_db, get_pool
+from app.moderation.models import ContentType
+from app.moderation.service import assert_not_banned, moderate_content
 import asyncpg
 from app.services.communities import (
     build_discover_communities_query,
@@ -258,18 +260,28 @@ async def get_community_conversations(
 async def create_conversation(
     community_id: str,
     payload: ConversationCreate,
+    background_tasks: BackgroundTasks,
     conn: asyncpg.Connection = Depends(get_db),
+    pool: asyncpg.Pool = Depends(get_pool),
     user_id: str = Depends(get_current_user),
 ):
     try:
-        return await start_conversation(
-            conn,
-            UUID(community_id),
-            UUID(user_id),
-            payload.title,
-            payload.body,
-            payload.prompt_type,
+        uid = UUID(user_id)
+        cid = UUID(community_id)
+        await assert_not_banned(conn, uid)
+        conversation = await start_conversation(
+            conn, cid, uid, payload.title, payload.body, payload.prompt_type
         )
+        background_tasks.add_task(
+            moderate_content,
+            pool,
+            ContentType.CONVERSATION,
+            conversation.id,
+            uid,
+            cid,
+            f"{payload.title}\n{payload.body}",
+        )
+        return conversation
     except HTTPException:
         raise
     except ValueError as e:
@@ -352,13 +364,27 @@ async def get_conversation_messages(
 async def create_message(
     conversation_id: str,
     payload: MessageCreate,
+    background_tasks: BackgroundTasks,
     conn: asyncpg.Connection = Depends(get_db),
+    pool: asyncpg.Pool = Depends(get_pool),
     user_id: str = Depends(get_current_user),
 ):
     try:
-        return await reply_to_conversation(
-            conn, UUID(conversation_id), UUID(user_id), payload.body
+        uid = UUID(user_id)
+        await assert_not_banned(conn, uid)
+        message = await reply_to_conversation(
+            conn, UUID(conversation_id), uid, payload.body
         )
+        background_tasks.add_task(
+            moderate_content,
+            pool,
+            ContentType.MESSAGE,
+            message.id,
+            uid,
+            None,
+            payload.body,
+        )
+        return message
     except HTTPException:
         raise
     except ValueError as e:
@@ -516,11 +542,25 @@ async def get_message_replies(
 async def create_reply(
     message_id: str,
     payload: ReplyCreate,
+    background_tasks: BackgroundTasks,
     conn: asyncpg.Connection = Depends(get_db),
+    pool: asyncpg.Pool = Depends(get_pool),
     user_id: str = Depends(get_current_user),
 ):
     try:
-        return await reply_to_message(conn, UUID(message_id), UUID(user_id), payload.body)
+        uid = UUID(user_id)
+        await assert_not_banned(conn, uid)
+        reply = await reply_to_message(conn, UUID(message_id), uid, payload.body)
+        background_tasks.add_task(
+            moderate_content,
+            pool,
+            ContentType.REPLY,
+            reply.id,
+            uid,
+            None,
+            payload.body,
+        )
+        return reply
     except HTTPException:
         raise
     except ValueError as e:

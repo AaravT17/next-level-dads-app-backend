@@ -26,8 +26,8 @@ _CONVERSATION_COLS = """
     u.name      AS author_name,
     u.avatar_url AS author_avatar_url,
     u.about     AS author_about,
-    (SELECT COUNT(*) FROM conversation_messages cm WHERE cm.conversation_id = c.id)
-    + (SELECT COUNT(*) FROM message_replies mr JOIN conversation_messages cm ON mr.message_id = cm.id WHERE cm.conversation_id = c.id)
+    (SELECT COUNT(*) FROM conversation_messages cm WHERE cm.conversation_id = c.id AND NOT cm.is_deleted)
+    + (SELECT COUNT(*) FROM message_replies mr JOIN conversation_messages cm ON mr.message_id = cm.id WHERE cm.conversation_id = c.id AND NOT mr.is_deleted AND NOT cm.is_deleted)
     AS reply_count,
     (SELECT COUNT(*) FROM conversation_hearts   ch  WHERE ch.conversation_id  = c.id) AS heart_count,
     (SELECT COUNT(*) FROM conversation_participants cp WHERE cp.conversation_id = c.id) AS participant_count
@@ -52,7 +52,7 @@ _MESSAGE_COLS = """
     u.avatar_url  AS author_avatar_url,
     u.about      AS author_about,
     (SELECT COUNT(*) FROM message_hearts mh WHERE mh.message_id = m.id) AS heart_count,
-    (SELECT COUNT(*) FROM message_replies mr WHERE mr.message_id = m.id) AS reply_count
+    (SELECT COUNT(*) FROM message_replies mr WHERE mr.message_id = m.id AND NOT mr.is_deleted) AS reply_count
 """
 
 _REPLY_COLS = """
@@ -117,6 +117,7 @@ async def list_conversations(
             FROM conversations c
             LEFT JOIN public.users u ON u.id = c.author_id
             WHERE c.community_id = $1
+            AND NOT c.is_deleted
             {time_filter}
         )
         SELECT * FROM convs
@@ -142,7 +143,7 @@ async def get_conversation(
             ) AS is_hearted
         FROM conversations c
         LEFT JOIN public.users u ON u.id = c.author_id
-        WHERE c.id = $1
+        WHERE c.id = $1 AND NOT c.is_deleted
     """
     return await conn.fetchrow(query, conversation_id, user_id)
 
@@ -154,7 +155,7 @@ async def list_messages(
     cursor_id: UUID | None = None,
     cursor_created_at: datetime | None = None,
 ) -> list[asyncpg.Record]:
-    conditions = ["m.conversation_id = $1"]
+    conditions = ["m.conversation_id = $1", "NOT m.is_deleted"]
     params: list = [conversation_id, user_id]
     i = 3
 
@@ -256,11 +257,36 @@ async def touch_conversation(
     await conn.execute(query, conversation_id)
 
 
+async def _assert_content_active(
+    conn: asyncpg.Connection,
+    table: str,
+    content_id: UUID,
+    label: str,
+) -> None:
+    """Raise 404 if the target row is missing or soft-deleted.
+
+    `table` is always a trusted literal supplied by the caller (never user
+    input), so the f-string interpolation is safe.
+    """
+    exists = await conn.fetchval(
+        f"SELECT EXISTS(SELECT 1 FROM {table} WHERE id = $1 AND NOT is_deleted)",
+        content_id,
+    )
+    if not exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{label} not found.",
+        )
+
+
 async def heart_conversation(
     conn: asyncpg.Connection,
     conversation_id: UUID,
     user_id: UUID,
 ) -> None:
+    await _assert_content_active(
+        conn, "conversations", conversation_id, "Conversation"
+    )
     await conn.execute(
         """
         INSERT INTO conversation_hearts (conversation_id, user_id)
@@ -289,6 +315,9 @@ async def heart_message(
     message_id: UUID,
     user_id: UUID,
 ) -> None:
+    await _assert_content_active(
+        conn, "conversation_messages", message_id, "Message"
+    )
     await conn.execute(
         """
         INSERT INTO message_hearts (message_id, user_id)
@@ -404,7 +433,7 @@ async def list_replies(
                 ) AS is_hearted
             FROM message_replies r
             LEFT JOIN public.users u ON u.id = r.author_id
-            WHERE r.message_id = $1
+            WHERE r.message_id = $1 AND NOT r.is_deleted
         )
         SELECT * FROM ranked
         {cursor_condition}
@@ -434,6 +463,7 @@ async def heart_reply(
     reply_id: UUID,
     user_id: UUID,
 ) -> None:
+    await _assert_content_active(conn, "message_replies", reply_id, "Reply")
     await conn.execute(
         """
         INSERT INTO reply_hearts (reply_id, user_id)
@@ -464,7 +494,15 @@ async def reply_to_message(
     body: str,
 ) -> ReplyResponse:
     exists = await conn.fetchval(
-        "SELECT EXISTS(SELECT 1 FROM conversation_messages WHERE id = $1)", message_id
+        """
+        SELECT EXISTS(
+            SELECT 1
+            FROM conversation_messages m
+            JOIN conversations c ON c.id = m.conversation_id
+            WHERE m.id = $1 AND NOT m.is_deleted AND NOT c.is_deleted
+        )
+        """,
+        message_id,
     )
     if not exists:
         raise HTTPException(
@@ -524,7 +562,8 @@ async def reply_to_conversation(
     body: str,
 ) -> MessageResponse:
     exists = await conn.fetchval(
-        "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = $1)", conversation_id
+        "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = $1 AND NOT is_deleted)",
+        conversation_id,
     )
     if not exists:
         raise HTTPException(
@@ -537,11 +576,23 @@ async def reply_to_conversation(
         await touch_conversation(conn, conversation_id)
         await upsert_participant(conn, conversation_id, author_id)
 
-    records = await list_messages(conn, conversation_id, author_id)
-    match = next((r for r in records if r["id"] == row["id"]), None)
-    if match is None:
+    # Fetch the new message by id — scanning the first page of list_messages
+    # misses it once the conversation has MESSAGES_PAGE_LIMIT+ messages (it
+    # sorts last by created_at).
+    record = await conn.fetchrow(
+        f"""
+        SELECT
+            {_MESSAGE_COLS},
+            FALSE AS is_hearted
+        FROM conversation_messages m
+        LEFT JOIN public.users u ON u.id = m.author_id
+        WHERE m.id = $1
+        """,
+        row["id"],
+    )
+    if record is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch created message.",
         )
-    return record_to_message(match)
+    return record_to_message(record)

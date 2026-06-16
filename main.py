@@ -10,10 +10,13 @@ from app.routers.interests import router as interests_router
 from app.routers.communities import router as communities_router, conversations_router, messages_router, replies_router
 from app.routers.events import router as events_router
 from app.routers.connections import router as connections_router
+from app.routers.moderation import router as moderation_router
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from contextlib import asynccontextmanager
 from app.config.supabase import init_supabase
+from app.moderation.toxicity import warmup as warmup_moderation
+import asyncio
 import asyncpg
 
 
@@ -28,6 +31,9 @@ async def lifespan(app: FastAPI):
         )
     except Exception as _:
         raise SystemExit(1)
+    # Load the toxicity model in the background so it's ready for the first
+    # post without blocking startup.
+    asyncio.create_task(warmup_moderation())
     yield
     await app.state.pool.close()
 
@@ -51,3 +57,4 @@ app.include_router(messages_router)
 app.include_router(replies_router)
 app.include_router(events_router)
 app.include_router(connections_router)
+app.include_router(moderation_router)
