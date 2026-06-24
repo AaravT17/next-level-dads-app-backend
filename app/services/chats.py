@@ -176,7 +176,15 @@ async def create_chat(
                     [(chat_id, user_id), (chat_id, participant_ids[0])],
                 )
         except asyncpg.UniqueViolationError:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='A DM chat with this user already exists')
+            existing_chat_id = await conn.fetchval(
+                """
+                SELECT id FROM chats
+                WHERE (dm_user_1 = $1 AND dm_user_2 = $2) OR (dm_user_1 = $2 AND dm_user_2 = $1)
+                """,
+                user_id,
+                participant_ids[0],
+            )
+            return {'id': str(existing_chat_id), 'created': False}
         except Exception as _:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -200,7 +208,7 @@ async def create_chat(
                 detail='Failed to create chat. Please try again later.',
             )
 
-    return {'id': str(chat_id)}
+    return {'id': str(chat_id), 'created': True}
 
 
 async def get_messages(
@@ -309,6 +317,7 @@ async def send_message(
     chat_id: UUID,
     body: SendMessageRequest,
 ) -> MessageResponse:
+    # TODO: Move sending messages to be over WebSocket instead of REST, more performant
     try:
         validation = await conn.fetchrow(
             """
@@ -451,12 +460,13 @@ async def edit_message(
             )
             SELECT
                 updated.id,
+                updated.chat_id,
                 updated.content,
                 updated.edited_at,
                 array_agg(cp.user_id) AS participant_ids
             FROM updated
             JOIN chat_participants cp ON cp.chat_id = updated.chat_id
-            GROUP BY updated.id, updated.content, updated.edited_at
+            GROUP BY updated.id, updated.chat_id, updated.content, updated.edited_at
             """,
             message_id,
             chat_id,
@@ -479,8 +489,10 @@ async def edit_message(
             type='messages:edit',
             payload={
                 'id': str(result['id']),
+                'chat_id': str(result['chat_id']),
                 'content': result['content'],
                 'edited_at': result['edited_at'].isoformat(),
+                'is_deleted': False,
             },
         )
     )
@@ -505,10 +517,11 @@ async def delete_message(
             )
             SELECT
                 updated.id,
+                updated.chat_id,
                 array_agg(cp.user_id) AS participant_ids
             FROM updated
             JOIN chat_participants cp ON cp.chat_id = updated.chat_id
-            GROUP BY updated.id
+            GROUP BY updated.id, updated.chat_id
             """,
             message_id,
             chat_id,
@@ -528,7 +541,13 @@ async def delete_message(
         _publish_event(
             publish_to=[pid for pid in result['participant_ids'] if str(pid) != str(user_id)],
             type='messages:delete',
-            payload={'id': str(result['id'])},
+            payload={
+                'id': str(result['id']),
+                'chat_id': str(result['chat_id']),
+                'content': '',
+                'is_deleted': True,
+                'edited_at': None,
+            },
         )
     )
 
@@ -729,6 +748,7 @@ async def leave_chat(
     user_id: UUID,
     chat_id: UUID,
 ):
+    # TODO: Cannot leave a DM chat, also, on unconnect, delete the DM chat if it exists
     try:
         await conn.execute(
             """

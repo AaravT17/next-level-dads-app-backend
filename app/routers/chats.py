@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status, Query
+from fastapi import APIRouter, Depends, status, Query, Response
 from app.dependencies.auth import get_current_user
 from app.dependencies.db import get_db
 import asyncpg
@@ -35,13 +35,16 @@ async def get_chat_previews(
     return await chats_service.get_chat_previews(conn, user_id, cursor_id, cursor_updated_at)
 
 
-@router.post('/', status_code=status.HTTP_201_CREATED)
+@router.post('/')
 async def create_chat(
     body: CreateChatRequest,
+    response: Response,
     user_id: str = Depends(get_current_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    return await chats_service.create_chat(conn, user_id, body)
+    result = await chats_service.create_chat(conn, user_id, body)
+    response.status_code = status.HTTP_201_CREATED if result['created'] else status.HTTP_200_OK
+    return {'id': result['id']}
 
 
 @router.get('/{chat_id}', response_model=ChatResponse)
@@ -172,3 +175,9 @@ async def get_addable_participants(
     conn: asyncpg.Connection = Depends(get_db),
 ):
     return await chats_service.get_addable_participants(conn, user_id, chat_id, user_name, cursor_id, cursor_name)
+
+
+# TODO: Add an endpoint to update chat name, an endpoint to get chat details (name + list of participants)
+# for the chat details screen, and an endpoint to update last_read_at for when a user opens a chat, which
+# should also publish a chats:read event over the same pubsub channel so other tabs/devices for the same user
+# can sync their unread state
