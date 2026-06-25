@@ -51,6 +51,7 @@ def _build_chat_preview_row(r) -> ChatResponse:
         type=r['type'],
         name=r['name'],
         updated_at=r['updated_at'],
+        last_read_at=r['last_read_at'],
         last_message=last_message,
         other_user=other_user,
     )
@@ -62,6 +63,7 @@ _CHAT_PREVIEW_QUERY = """
         c.type,
         c.name,
         c.updated_at,
+        cp.last_read_at,
         lm.id AS last_message_id,
         lm.content AS last_message_content,
         lm.sender_id AS last_message_sender_id,
@@ -936,3 +938,16 @@ async def get_addable_participants(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Failed to fetch addable participants. Please try again later.',
         )
+
+
+async def mark_chat_read(conn: asyncpg.Connection, user_id: str, chat_id: str) -> datetime | None:
+    return await conn.fetchval(
+        """
+        UPDATE chat_participants
+        SET last_read_at = NOW()
+        WHERE user_id = $1 AND chat_id = $2
+        RETURNING last_read_at
+        """,
+        user_id,
+        chat_id,
+    )

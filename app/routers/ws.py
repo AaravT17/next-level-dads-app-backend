@@ -1,6 +1,9 @@
 from fastapi import APIRouter, status, Query, WebSocket, WebSocketDisconnect
 from app.utils.auth import verify_token
 from app.ws.connection_manager import connect, disconnect
+from app.config.redis import publish
+from app.services.chats import mark_chat_read
+import json
 
 
 router = APIRouter(
@@ -19,10 +22,36 @@ async def chat_websocket(ws: WebSocket, token: str = Query(...), connection_id: 
     try:
         await connect(user_id, connection_id, ws)
         while True:
-            # keep the connection alive, we don't care about incoming messages, those are sent to server via
-            # REST API rather than over WebSocket, so we can ignore any messages received here, but we need to
-            # keep the connection open
-            await ws.receive_text()
+            text = await ws.receive_text()
+            try:
+                msg = json.loads(text)
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+            if msg.get('type') == 'chats:read':
+                chat_id = msg.get('chat_id')
+                if not chat_id:
+                    continue
+                try:
+                    async with ws.app.state.pool.acquire() as conn:
+                        last_read_at = await mark_chat_read(conn, user_id, chat_id)
+                    if last_read_at:
+                        await publish(
+                            user_id,
+                            {
+                                'user_id': user_id,
+                                'event_data': {
+                                    'type': 'chats:read',
+                                    'payload': {
+                                        'chat_id': chat_id,
+                                        'last_read_at': last_read_at.isoformat(),
+                                    },
+                                },
+                            },
+                        )
+                except Exception:
+                    pass
+
     except WebSocketDisconnect:
         # the connection has already been closed, need not call ws.close() here
         pass

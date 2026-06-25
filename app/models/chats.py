@@ -25,6 +25,7 @@ class ChatResponse(BaseModel):
     type: Literal['dm', 'group']
     name: str | None = None
     updated_at: datetime
+    last_read_at: datetime | None = None
     last_message: LastMessageResponse | None = None
     other_user: OtherUserResponse | None = None
 
