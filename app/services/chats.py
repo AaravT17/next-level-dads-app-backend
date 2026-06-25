@@ -946,6 +946,48 @@ async def get_addable_participants(
         )
 
 
+async def update_chat_name(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    chat_id: UUID,
+    name: str,
+) -> None:
+    try:
+        validation = await conn.fetchrow(
+            """
+            SELECT c.type, cp.is_admin
+            FROM chat_participants cp
+            JOIN chats c ON c.id = cp.chat_id
+            WHERE cp.chat_id = $1 AND cp.user_id = $2
+            """,
+            chat_id,
+            user_id,
+        )
+        if not validation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Chat not found')
+        if validation['type'] != 'group':
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Only group chats can have a name')
+        if not validation['is_admin']:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Only admins can update the chat name')
+
+        await conn.execute(
+            """
+            UPDATE chats
+            SET name = $1, updated_at = NOW()
+            WHERE id = $2
+            """,
+            name,
+            chat_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to update chat name. Please try again later.',
+        )
+
+
 async def mark_chat_read(conn: asyncpg.Connection, user_id: str, chat_id: str) -> datetime | None:
     return await conn.fetchval(
         """

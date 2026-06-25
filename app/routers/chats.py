@@ -14,6 +14,7 @@ from app.models.chats import (
     ChatParticipantResponse,
     AddParticipantsRequest,
     ChatAddableParticipantResponse,
+    UpdateChatNameRequest,
 )
 import app.services.chats as chats_service
 
@@ -55,9 +56,14 @@ async def get_chat_preview(
     return await chats_service.get_chat_preview(conn, user_id, chat_id)
 
 
-# TODO: when a user opens a chat, update last_read_at in chat_participants and publish a chats:read event
-# over the same pubsub channel so other tabs/devices for the same user can sync their unread state.
-# unread indicator can then be derived from chat.updated_at > last_read_at in the chat preview query.
+@router.patch('/{chat_id}', status_code=status.HTTP_204_NO_CONTENT)
+async def update_chat_name(
+    chat_id: UUID,
+    body: UpdateChatNameRequest,
+    user_id: str = Depends(get_current_user),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    await chats_service.update_chat_name(conn, UUID(user_id), chat_id, body.name)
 
 
 @router.get('/{chat_id}/messages', response_model=list[MessageResponse])
@@ -176,7 +182,3 @@ async def get_addable_participants(
     return await chats_service.get_addable_participants(conn, user_id, chat_id, user_name, cursor_id, cursor_name)
 
 
-# TODO: Add an endpoint to update chat name, an endpoint to get chat details (name + list of participants)
-# for the chat details screen, and an endpoint to update last_read_at for when a user opens a chat, which
-# should also publish a chats:read event over the same pubsub channel so other tabs/devices for the same user
-# can sync their unread state

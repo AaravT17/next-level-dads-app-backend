@@ -117,3 +117,11 @@ class ChatAddableParticipantResponse(BaseModel):
     id: UUID
     name: str = Field(max_length=MAX_NAME_LENGTH)
     avatar_url: str | None = None
+
+
+class UpdateChatNameRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+
+    @field_validator('name', mode='before')
+    def validate_name(cls, name: str):
+        return name.strip()
