@@ -89,6 +89,7 @@ async def get_chat_previews(
     user_id: UUID,
     cursor_id: UUID | None,
     cursor_updated_at: datetime | None,
+    name: str | None = None,
 ) -> list[ChatResponse]:
     conditions = ['cp.user_id = $1']
     params = [user_id]
@@ -98,6 +99,11 @@ async def get_chat_previews(
         conditions.append(f'(c.updated_at, c.id) < (${i}, ${i + 1})')
         params.extend([cursor_updated_at, cursor_id])
         i += 2
+
+    if name:
+        conditions.append(f"(c.type = 'group' AND c.name ILIKE ${i} OR c.type = 'dm' AND ou.name ILIKE ${i})")
+        params.append(f'%{name}%')
+        i += 1
 
     where_clause = ' AND '.join(conditions)
     query = f'{_CHAT_PREVIEW_QUERY} WHERE {where_clause} ORDER BY c.updated_at DESC, c.id DESC LIMIT ${i}'

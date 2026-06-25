@@ -25,14 +25,13 @@ router = APIRouter(
 
 @router.get('/', response_model=list[ChatResponse])
 async def get_chat_previews(
+    name: str | None = Query(None),
     cursor_id: UUID | None = Query(None),
     cursor_updated_at: datetime | None = Query(None),
     user_id: str = Depends(get_current_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    # TODO: Support filtering by chat name, bearing in mind that for group chats, the name is the given name, but
-    # for 1:1 chats, the name is the other participant's name, probably use a CASE statement or a CTE to unify this
-    return await chats_service.get_chat_previews(conn, user_id, cursor_id, cursor_updated_at)
+    return await chats_service.get_chat_previews(conn, user_id, cursor_id, cursor_updated_at, name)
 
 
 @router.post('/')
