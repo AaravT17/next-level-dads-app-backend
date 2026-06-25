@@ -33,12 +33,18 @@ def build_discover_profiles_query(
     children_age_ranges: list[str] | None = None,
     provinces: list[str] | None = None,
     age_ranges: list[str] | None = None,
+    name: str | None = None,
     cursor_id: UUID | None = None,
     cursor_created_at: datetime | None = None,
 ) -> tuple[str, list]:
     conditions = ['u.id != $1']
     params = [user_id]
     i = 2
+
+    if name:
+        conditions.append(f'u.name ILIKE ${i}')
+        params.append(f'%{name}%')
+        i += 1
 
     if provinces:
         conditions.append(f'u.province = ANY(${i}::text[])')
@@ -89,9 +95,6 @@ def build_discover_profiles_query(
 
     return query, params
 
-
-# TODO: No longer make it required to be a dad or be expecting in order to use the app/create
-# your profile, add search by name on discover page
 
 # TODO: Discuss race conditions between WS event updating cache vs. API call to fetch new data, can we synchronize
 # cache updates via these two i.e. make web socket events wait for the API call to finish before updating the cache,

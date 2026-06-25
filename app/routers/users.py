@@ -194,6 +194,7 @@ async def get_discover_profiles(
     children_age_ranges: list[str] | None = Query(None),
     provinces: list[str] | None = Query(None),
     age_ranges: list[str] | None = Query(None),
+    name: str | None = Query(None),
     cursor_id: str | None = Query(None),
     cursor_created_at: datetime | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
@@ -207,6 +208,7 @@ async def get_discover_profiles(
             children_age_ranges=children_age_ranges,
             provinces=provinces,
             age_ranges=age_ranges,
+            name=name,
             cursor_id=UUID(cursor_id) if cursor_id else None,
             cursor_created_at=cursor_created_at,
         )
