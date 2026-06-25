@@ -209,8 +209,16 @@ async def remove_connection(
     try:
         user_id, curr_user_id = UUID(user_id), UUID(curr_user_id)
         query = """
-            DELETE FROM connections
-            WHERE (requesting_id = $1 AND requested_id = $2) OR (requesting_id = $2 AND requested_id = $1)
+            WITH remove_connection AS (
+                DELETE FROM connections
+                WHERE (requesting_id = $1 AND requested_id = $2) OR (requesting_id = $2 AND requested_id = $1)
+            )
+            DELETE FROM chats
+            WHERE type = 'dm'
+            AND (
+                (dm_user_1 = $1 AND dm_user_2 = $2) OR
+                (dm_user_1 = $2 AND dm_user_2 = $1)
+            )
         """
         await conn.execute(query, *[curr_user_id, user_id])
         return

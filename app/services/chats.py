@@ -756,18 +756,18 @@ async def leave_chat(
     user_id: UUID,
     chat_id: UUID,
 ):
-    # TODO: Cannot leave a DM chat, also, on unconnect, delete the DM chat if it exists
     try:
         await conn.execute(
             """
             WITH clear_owner AS (
                 UPDATE chats
                 SET created_by = NULL
-                WHERE id = $1 AND created_by = $2
+                WHERE id = $1 AND created_by = $2 AND type = 'group'
             ),
             remove_participant AS (
                 DELETE FROM chat_participants
                 WHERE chat_id = $1 AND user_id = $2
+                AND (SELECT type FROM chats WHERE id = $1) = 'group'
                 RETURNING chat_id
             ),
             remaining_participants AS (
@@ -776,7 +776,7 @@ async def leave_chat(
                 WHERE chat_id = $1 AND user_id != $2
             )
             DELETE FROM chats
-            WHERE id = $1 AND (SELECT count FROM remaining_participants) = 0
+            WHERE id = $1 AND type = 'group' AND (SELECT count FROM remaining_participants) = 0
             """,
             chat_id,
             user_id,
