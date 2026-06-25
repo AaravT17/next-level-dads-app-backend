@@ -11,8 +11,8 @@ async def init_pubsub():
     global pubsub_client, pubsub_task
     redis_client = get_redis()
     try:
-        pubsub_client = redis_client.pubsub()
-        pubsub_task = asyncio.create_task(pubsub_client.run(ignore_subscribe_messages=True))
+        pubsub_client = redis_client.pubsub(ignore_subscribe_messages=True)
+        pubsub_task = asyncio.create_task(pubsub_client.run())
     except Exception as _:
         raise RuntimeError('Failed to initialize Pub/Sub')
 

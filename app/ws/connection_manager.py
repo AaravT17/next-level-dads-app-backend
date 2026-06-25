@@ -32,7 +32,7 @@ async def disconnect(user_id: str, connection_id: str):
 
 async def handle_event(msg: dict):
     # msg is a dict with keys: type, channel, data
-    # the handler is only called with type 'message' because we set ignore_subscribe_messages=True
+    # subscribe/unsubscribe confirmation messages are suppressed via ignore_subscribe_messages=True on the pubsub client
     try:
         data = json.loads(msg['data'])  # data contains the actual payload we published
     except json.JSONDecodeError:

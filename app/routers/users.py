@@ -35,31 +35,27 @@ from app.services.communities import build_user_communities_query
 from app.services.events import build_user_events_query
 
 
-router = APIRouter(prefix="/api/users", tags=["users"])
+router = APIRouter(prefix='/api/users', tags=['users'])
 
 
-@router.get("/me", response_model=UserResponse)
-async def get_curr_user(
-    conn: asyncpg.Connection = Depends(get_db), user_id: str = Depends(get_current_user)
-):
+@router.get('/me', response_model=UserResponse)
+async def get_curr_user(conn: asyncpg.Connection = Depends(get_db), user_id: str = Depends(get_current_user)):
     try:
         query, params = build_get_user_by_id_query(user_id=user_id)
         res = await conn.fetchrow(query, *params)
         if not res:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="User not found."
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User not found.')
         return UserResponse(**res)
     except HTTPException as _:
         raise
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch user. Please try again later.",
+            detail='Failed to fetch user. Please try again later.',
         )
 
 
-@router.get("/{id}", response_model=UserProfileResponse)
+@router.get('/{id}', response_model=UserProfileResponse)
 async def get_user(
     id: str,
     conn: asyncpg.Connection = Depends(get_db),
@@ -69,19 +65,13 @@ async def get_user(
         query, params = build_get_user_by_id_query(user_id=id, curr_user_id=user_id)
         res = await conn.fetchrow(query, *params)
         if not res:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="User not found."
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User not found.')
         return UserProfileResponse(
-            **{
-                k: v
-                for k, v in dict(res).items()
-                if k not in ("requesting_id", "connection_status")
-            },
+            **{k: v for k, v in dict(res).items() if k not in ('requesting_id', 'connection_status')},
             connection_status=resolve_connection_status(
                 UUID(user_id),
-                res["requesting_id"],
-                res["connection_status"],
+                res['requesting_id'],
+                res['connection_status'],
             ),
         )
     except HTTPException as _:
@@ -89,11 +79,11 @@ async def get_user(
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch user. Please try again later.",
+            detail='Failed to fetch user. Please try again later.',
         )
 
 
-@router.post("/", status_code=status.HTTP_201_CREATED, response_model=UserResponse)
+@router.post('/', status_code=status.HTTP_201_CREATED, response_model=UserResponse)
 async def create_user(
     name: str = Form(..., max_length=MAX_NAME_LENGTH),
     date_of_birth: date = Form(...),
@@ -113,23 +103,21 @@ async def create_user(
         if not mime_type or mime_type not in IMAGE_MIME_TO_EXT:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid avatar image type. Supported types: PNG, JPG, JPEG.",
+                detail='Invalid avatar image type. Supported types: PNG, JPG, JPEG.',
             )
         file_path = user_id
         file_contents = await avatar.read()
         try:
-            await supabase_admin.storage.from_("avatars").upload(
+            await supabase_admin.storage.from_('avatars').upload(
                 path=file_path,
                 file=file_contents,
-                file_options={"content-type": mime_type, "upsert": "true"},
+                file_options={'content-type': mime_type, 'upsert': 'true'},
             )
-            avatar_url = await supabase_admin.storage.from_("avatars").get_public_url(
-                file_path
-            )
+            avatar_url = await supabase_admin.storage.from_('avatars').get_public_url(file_path)
         except Exception as _:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to upload avatar. Please try again later.",
+                detail='Failed to upload avatar. Please try again later.',
             )
 
     try:
@@ -152,7 +140,7 @@ async def create_user(
                     RETURNING id, name
                 """
                 res = await conn.fetch(query, *[normalized_interests])
-                interest_ids = [r["id"] for r in res]
+                interest_ids = [r['id'] for r in res]
                 query = """
                     INSERT INTO user_interests (user_id, interest_id)
                     SELECT $1, unnest($2::uuid[])
@@ -163,32 +151,26 @@ async def create_user(
                 SELECT $1, unnest($2::text[])
             """
             await conn.execute(query, *[UUID(user_id), children_age_ranges])
-            user_res = await conn.fetchrow(
-                'SELECT * FROM user_profiles WHERE id = $1', UUID(user_id)
-            )
-            return UserResponse(
-                **user_res,
-                interests=normalized_interests,
-                children=children_age_ranges,
-            )
+            user_res = await conn.fetchrow('SELECT * FROM user_profiles WHERE id = $1', UUID(user_id))
+            return UserResponse(**user_res)
     except asyncpg.exceptions.UniqueViolationError as _:
         # unique violation can occur if user tries to create a profile when one already exists for them
         if avatar_url:
             await delete_avatar_from_storage(user_id)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="User already exists.",
+            detail='User already exists.',
         )
     except Exception as _:
         if avatar_url:
             await delete_avatar_from_storage(user_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create user. Please try again later.",
+            detail='Failed to create user. Please try again later.',
         )
 
 
-@router.get("/", response_model=list[UserProfileResponse])
+@router.get('/', response_model=list[UserProfileResponse])
 async def get_discover_profiles(
     interests: list[str] | None = Query(None),
     children_age_ranges: list[str] | None = Query(None),
@@ -215,14 +197,8 @@ async def get_discover_profiles(
         res = await conn.fetch(query, *params)
         profiles = [
             UserProfileResponse(
-                **{
-                    k: v
-                    for k, v in dict(r).items()
-                    if k not in ("requesting_id", "connection_status")
-                },
-                connection_status=resolve_connection_status(
-                    uid, r["requesting_id"], r["connection_status"]
-                ),
+                **{k: v for k, v in dict(r).items() if k not in ('requesting_id', 'connection_status')},
+                connection_status=resolve_connection_status(uid, r['requesting_id'], r['connection_status']),
             )
             for r in res
         ]
@@ -232,11 +208,11 @@ async def get_discover_profiles(
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch profiles. Please try again later.",
+            detail='Failed to fetch profiles. Please try again later.',
         )
 
 
-@router.get("/me/communities", response_model=list[CommunityResponse])
+@router.get('/me/communities', response_model=list[CommunityResponse])
 async def get_user_communities(
     name: str | None = Query(None),
     cursor_id: str | None = Query(None),
@@ -258,11 +234,11 @@ async def get_user_communities(
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch communities. Please try again later.",
+            detail='Failed to fetch communities. Please try again later.',
         )
 
 
-@router.get("/me/events", response_model=list[EventResponse])
+@router.get('/me/events', response_model=list[EventResponse])
 async def get_user_events(
     name: str | None = Query(None),
     cursor_id: str | None = Query(None),
@@ -284,11 +260,11 @@ async def get_user_events(
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch events. Please try again later.",
+            detail='Failed to fetch events. Please try again later.',
         )
 
 
-@router.patch("/me", response_model=UserResponse)
+@router.patch('/me', response_model=UserResponse)
 async def update_user(
     name: str = Body(..., max_length=MAX_NAME_LENGTH),
     date_of_birth: date = Body(...),
@@ -320,7 +296,7 @@ async def update_user(
                     RETURNING id, name
                 """
                 res = await conn.fetch(query, *[normalized_interests])
-                interest_ids = [r["id"] for r in res]
+                interest_ids = [r['id'] for r in res]
                 # insert into user_interests table
                 query = """
                     INSERT INTO user_interests (user_id, interest_id)
@@ -350,28 +326,20 @@ async def update_user(
                 query,
                 *[name, date_of_birth, city, province, about, UUID(user_id)],
             )
-            res = await conn.fetchrow(
-                'SELECT * FROM user_profiles WHERE id = $1', UUID(user_id)
-            )
+            res = await conn.fetchrow('SELECT * FROM user_profiles WHERE id = $1', UUID(user_id))
             if not res:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found."
-                )
-            return UserResponse(
-                **res,
-                interests=normalized_interests,
-                children=children_age_ranges,
-            )
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User not found.')
+            return UserResponse(**res)
     except HTTPException as _:
         raise
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update profile. Please try again later.",
+            detail='Failed to update profile. Please try again later.',
         )
 
 
-@router.put("/me/avatar")
+@router.put('/me/avatar')
 async def update_avatar(
     avatar: UploadFile = File(...),
     conn: asyncpg.Connection = Depends(get_db),
@@ -382,34 +350,32 @@ async def update_avatar(
     if not mime_type or mime_type not in IMAGE_MIME_TO_EXT:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid avatar image type. Supported types: PNG, JPG, JPEG.",
+            detail='Invalid avatar image type. Supported types: PNG, JPG, JPEG.',
         )
     file_path = user_id
     file_contents = await avatar.read()
     try:
-        await supabase_admin.storage.from_("avatars").upload(
+        await supabase_admin.storage.from_('avatars').upload(
             path=file_path,
             file=file_contents,
-            file_options={"content-type": mime_type, "upsert": "true"},
+            file_options={'content-type': mime_type, 'upsert': 'true'},
         )
-        avatar_url = await supabase_admin.storage.from_("avatars").get_public_url(
-            file_path
-        )
+        avatar_url = await supabase_admin.storage.from_('avatars').get_public_url(file_path)
         query = """
             UPDATE users SET avatar_url = $1 WHERE id = $2
         """
         await conn.execute(query, *[avatar_url, UUID(user_id)])
-        return {"avatar_url": avatar_url}
+        return {'avatar_url': avatar_url}
     except HTTPException as _:
         raise
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update avatar. Please try again later.",
+            detail='Failed to update avatar. Please try again later.',
         )
 
 
-@router.delete("/me/avatar", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete('/me/avatar', status_code=status.HTTP_204_NO_CONTENT)
 async def delete_avatar(
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_current_user),
@@ -426,11 +392,26 @@ async def delete_avatar(
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete avatar. Please try again later.",
+            detail='Failed to delete avatar. Please try again later.',
         )
 
 
-@router.get("/me/stats", response_model=UserStatsResponse)
+@router.delete('/me', status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    user_id: str = Depends(get_current_user),
+):
+    supabase_admin = get_supabase_admin()
+    try:
+        await supabase_admin.auth.admin.delete_user(user_id)
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to delete account. Please try again later.',
+        )
+    await delete_avatar_from_storage(user_id)
+
+
+@router.get('/me/stats', response_model=UserStatsResponse)
 async def get_user_stats(
     user_id: str = Depends(get_current_user),
     conn: asyncpg.Connection = Depends(get_db),
@@ -451,5 +432,5 @@ async def get_user_stats(
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch user stats. Please try again later.",
+            detail='Failed to fetch user stats. Please try again later.',
         )
