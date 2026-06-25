@@ -29,7 +29,7 @@ from app.services.users import (
 from app.utils.users import resolve_connection_status
 from app.dependencies.db import get_db
 import asyncpg
-from datetime import datetime
+from datetime import datetime, date
 from uuid import UUID
 from app.services.communities import build_user_communities_query
 from app.services.events import build_user_events_query
@@ -96,7 +96,7 @@ async def get_user(
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=UserResponse)
 async def create_user(
     name: str = Form(..., max_length=MAX_NAME_LENGTH),
-    age: int = Form(..., ge=0, le=200),
+    date_of_birth: date = Form(...),
     city: str = Form(..., max_length=MAX_CITY_LENGTH),
     province: str = Form(..., min_length=2, max_length=2),
     about: str = Form(..., max_length=MAX_BIO_LENGTH),
@@ -135,13 +135,12 @@ async def create_user(
     try:
         async with conn.transaction():
             query = """
-                INSERT INTO users (id, name, age, city, province, about, avatar_url)
+                INSERT INTO users (id, name, date_of_birth, city, province, about, avatar_url)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
-                RETURNING *
             """
-            user_res = await conn.fetchrow(
+            await conn.execute(
                 query,
-                *[UUID(user_id), name, age, city, province, about, avatar_url],
+                *[UUID(user_id), name, date_of_birth, city, province, about, avatar_url],
             )
             normalized_interests = []
             if interests is not None:
@@ -164,6 +163,9 @@ async def create_user(
                 SELECT $1, unnest($2::text[])
             """
             await conn.execute(query, *[UUID(user_id), children_age_ranges])
+            user_res = await conn.fetchrow(
+                'SELECT * FROM user_profiles WHERE id = $1', UUID(user_id)
+            )
             return UserResponse(
                 **user_res,
                 interests=normalized_interests,
@@ -287,7 +289,7 @@ async def get_user_events(
 @router.patch("/me", response_model=UserResponse)
 async def update_user(
     name: str = Body(..., max_length=MAX_NAME_LENGTH),
-    age: int = Body(..., ge=0, le=200),
+    date_of_birth: date = Body(...),
     city: str = Body(..., max_length=MAX_CITY_LENGTH),
     province: str = Body(..., min_length=2, max_length=2),
     about: str = Body(..., max_length=MAX_BIO_LENGTH),
@@ -339,16 +341,17 @@ async def update_user(
             # finally, update the rest of the profile fields in the user_profiles table
             query = """
                 UPDATE users
-                SET name = $1, age = $2, city = $3, province = $4, about = $5, updated_at = NOW()
+                SET name = $1, date_of_birth = $2, city = $3, province = $4, about = $5, updated_at = NOW()
                 WHERE id = $6
-                RETURNING *
             """
-            res = await conn.fetchrow(
+            await conn.execute(
                 query,
-                *[name, age, city, province, about, UUID(user_id)],
+                *[name, date_of_birth, city, province, about, UUID(user_id)],
+            )
+            res = await conn.fetchrow(
+                'SELECT * FROM user_profiles WHERE id = $1', UUID(user_id)
             )
             if not res:
-                # this should never happen since the user must exist to reach this endpoint, but we add this check just in case
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="User not found."
                 )

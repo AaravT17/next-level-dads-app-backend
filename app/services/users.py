@@ -90,8 +90,8 @@ def build_discover_profiles_query(
     return query, params
 
 
-# TODO: No longer make it required to be a dad or be expecting in order to use the app/create your profile,
-# change age to be based on DOB rather than inputted age, add search by name on discover page
+# TODO: No longer make it required to be a dad or be expecting in order to use the app/create
+# your profile, add search by name on discover page
 
 # TODO: Discuss race conditions between WS event updating cache vs. API call to fetch new data, can we synchronize
 # cache updates via these two i.e. make web socket events wait for the API call to finish before updating the cache,
