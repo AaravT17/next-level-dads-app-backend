@@ -2,6 +2,8 @@ from fastapi import Depends, HTTPException, status
 from supabase_auth.errors import AuthApiError
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.config.supabase import get_supabase
+import asyncpg
+from app.dependencies.db import get_db
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -36,3 +38,20 @@ async def get_current_user(token: str = Depends(get_current_access_token)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Something went wrong. Please try again later.",
         )
+
+
+async def get_admin_user(
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+) -> str:
+    """Return the user_id only if the user has is_admin = TRUE."""
+    is_admin = await conn.fetchval(
+        "SELECT is_admin FROM public.users WHERE id = $1",
+        user_id,
+    )
+    if not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required.",
+        )
+    return user_id

@@ -115,11 +115,18 @@ async def moderate_content(
     """
     try:
         result = await _classify(text)
-        if not result.flagged:
+
+        if result.score is None and not result.flagged:
             return
 
-        layer = result.layer or ModerationLayer.PROFANITY
         async with pool.acquire() as conn:
+            if result.score is not None:
+                await repo.record_toxicity_score(conn, content_type, content_id, result.score)
+
+            if not result.flagged:
+                return
+
+            layer = result.layer or ModerationLayer.PROFANITY
             async with conn.transaction():
                 # Messages/replies are scheduled without a community id; resolve
                 # it here so the audit log keeps community attribution.

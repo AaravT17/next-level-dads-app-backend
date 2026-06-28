@@ -31,6 +31,14 @@ def build_removal_message(content_type: ContentType, layer: ModerationLayer) -> 
     return f"Your {noun} was removed because {why}.{_AI_DISCLAIMER}"
 
 
+def build_moderator_removal_message(content_type: ContentType) -> str:
+    noun = _CONTENT_NOUN.get(content_type, "message")
+    return (
+        f"Your {noun} was removed by a moderator because it violates our "
+        "community guidelines."
+    )
+
+
 def build_ban_message(duration_hours: int) -> str:
     return (
         f"Your posting access has been temporarily suspended for {duration_hours} "

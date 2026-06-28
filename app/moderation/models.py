@@ -81,3 +81,78 @@ class NotificationResponse(BaseModel):
 class BanStatusResponse(BaseModel):
     banned: bool
     expires_at: datetime | None = None
+
+
+# ── User-report API schemas ────────────────────────────────────────────────
+
+
+class UserReportCreate(BaseModel):
+    reported_id: UUID
+    reason: str | None = Field(
+        default=None, max_length=MODERATION_REPORT_REASON_MAX_LENGTH
+    )
+
+
+class UserReportResponse(BaseModel):
+    id: UUID
+    reported_id: UUID
+    status: str
+    created_at: datetime
+
+
+# ── Admin API schemas ──────────────────────────────────────────────────────
+
+
+class AdminContentReportItem(BaseModel):
+    id: UUID
+    content_type: ContentType
+    content_id: UUID
+    reporter_id: UUID
+    reporter_name: str | None = None
+    reason: str | None = None
+    status: str
+    created_at: datetime
+
+
+class AdminUserReportItem(BaseModel):
+    id: UUID
+    reported_id: UUID
+    reported_name: str | None = None
+    reporter_id: UUID
+    reporter_name: str | None = None
+    reason: str | None = None
+    status: str
+    created_at: datetime
+
+
+class AdminFilteredMessageItem(BaseModel):
+    id: UUID
+    content_type: ContentType
+    content_id: UUID
+    author_id: UUID | None = None
+    author_name: str | None = None
+    community_id: UUID | None = None
+    original_text: str
+    layer: ModerationLayer
+    reason: str | None = None
+    score: float | None = None
+    created_at: datetime
+
+
+class AdminBanItem(BaseModel):
+    id: UUID
+    user_id: UUID
+    user_name: str | None = None
+    reason: str
+    created_at: datetime
+    expires_at: datetime
+
+
+class AdminBanCreate(BaseModel):
+    user_id: UUID
+    reason: str
+    duration_hours: int = Field(ge=1, le=8760)
+
+
+class AdminReportStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(reviewed|dismissed|actioned)$")

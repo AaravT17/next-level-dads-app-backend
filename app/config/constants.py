@@ -52,7 +52,7 @@ EVENT_HOSTED_BY_CONTACT_PHONE_MAX_LENGTH = 20
 #   - facebook/roberta-hate-speech-dynabench-r4-target  hate-only
 TOXICITY_MODEL = "unitary/toxic-bert"
 # Minimum score (0..1) on any non-safe label required to remove content.
-TOXICITY_THRESHOLD = 0.8
+TOXICITY_THRESHOLD = 0.985
 # Labels that mean "clean" across common moderation models (lowercased). Any
 # label NOT in this set is treated as a violation when it clears the threshold.
 TOXICITY_SAFE_LABELS = frozenset(

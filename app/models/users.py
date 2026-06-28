@@ -15,6 +15,7 @@ class UserResponse(BaseModel):
     avatar_url: str | None
     interests: list[str] = []
     children: list[str] = []
+    is_admin: bool = False
 
 
 class UserProfileResponse(UserResponse):

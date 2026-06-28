@@ -10,7 +10,10 @@ from app.moderation.models import (
     NotificationResponse,
     ReportCreate,
     ReportResponse,
+    UserReportCreate,
+    UserReportResponse,
 )
+from app.moderation.repository import insert_user_report
 from app.moderation.service import (
     get_active_ban,
     list_notifications,
@@ -136,4 +139,37 @@ async def read_all_notifications(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update notifications. Please try again later.",
+        )
+
+
+@router.post(
+    "/user-reports",
+    response_model=UserReportResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_user_report(
+    payload: UserReportCreate,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    """Report another user for review by admins."""
+    if str(payload.reported_id) == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot report yourself.",
+        )
+    try:
+        record = await insert_user_report(
+            conn,
+            payload.reported_id,
+            UUID(user_id),
+            payload.reason,
+        )
+        return UserReportResponse(**dict(record))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to submit report. Please try again later.",
         )

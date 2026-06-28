@@ -11,6 +11,7 @@ from app.routers.communities import router as communities_router, conversations_
 from app.routers.events import router as events_router
 from app.routers.connections import router as connections_router
 from app.routers.moderation import router as moderation_router
+from app.routers.admin import router as admin_router
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from contextlib import asynccontextmanager
@@ -58,3 +59,4 @@ app.include_router(replies_router)
 app.include_router(events_router)
 app.include_router(connections_router)
 app.include_router(moderation_router)
+app.include_router(admin_router)

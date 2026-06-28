@@ -110,8 +110,11 @@ async def check_toxicity(text: str) -> ModerationResult:
         return ModerationResult.clean()
 
     label, score = _top_violation(predictions)
-    if label is None or score < TOXICITY_THRESHOLD:
+    if label is None:
         return ModerationResult.clean()
+    if score < TOXICITY_THRESHOLD:
+        # Below the removal threshold but still record the score for audit.
+        return ModerationResult(flagged=False, score=score)
 
     return ModerationResult(
         flagged=True,

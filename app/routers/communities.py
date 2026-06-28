@@ -451,7 +451,9 @@ async def heart_a_conversation(
     user_id: str = Depends(get_current_user),
 ):
     try:
-        await heart_conversation(conn, UUID(conversation_id), UUID(user_id))
+        uid = UUID(user_id)
+        await assert_not_banned(conn, uid)
+        await heart_conversation(conn, UUID(conversation_id), uid)
     except HTTPException:
         raise
     except ValueError as e:
@@ -499,7 +501,9 @@ async def heart_a_message(
     user_id: str = Depends(get_current_user),
 ):
     try:
-        await heart_message(conn, UUID(message_id), UUID(user_id))
+        uid = UUID(user_id)
+        await assert_not_banned(conn, uid)
+        await heart_message(conn, UUID(message_id), uid)
     except HTTPException:
         raise
     except ValueError as e:
@@ -630,7 +634,9 @@ async def heart_a_reply(
     user_id: str = Depends(get_current_user),
 ):
     try:
-        await heart_reply(conn, UUID(reply_id), UUID(user_id))
+        uid = UUID(user_id)
+        await assert_not_banned(conn, uid)
+        await heart_reply(conn, UUID(reply_id), uid)
     except HTTPException:
         raise
     except ValueError as e:

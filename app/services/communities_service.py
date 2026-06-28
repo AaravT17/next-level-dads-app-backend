@@ -15,6 +15,7 @@ from app.models.communities import (
 
 REMOVED_CONVERSATION_TITLE = "Removed post"
 REMOVED_BY_ORIGINAL_POSTER = "Removed by original poster."
+REMOVED_BY_MODERATOR = "Removed by moderator."
 
 _CONVERSATION_COLS = """
     c.id,
@@ -23,6 +24,18 @@ _CONVERSATION_COLS = """
     c.body,
     c.prompt_type,
     c.is_deleted,
+    EXISTS (
+        SELECT 1 FROM moderation_reports mr
+        WHERE mr.content_type = 'conversation'
+          AND mr.content_id = c.id
+          AND mr.status = 'pending'
+    ) AS has_pending_report,
+    EXISTS (
+        SELECT 1 FROM moderation_filtered_messages mfm
+        WHERE mfm.content_type = 'conversation'
+          AND mfm.content_id = c.id
+          AND mfm.layer = 'report'
+    ) AS deleted_by_moderator,
     c.deleted_at,
     c.created_at,
     c.updated_at,
@@ -35,24 +48,45 @@ _CONVERSATION_COLS = """
         SELECT COUNT(*)
         FROM conversation_messages cm
         WHERE cm.conversation_id = c.id
-        AND NOT EXISTS (
+        AND (
+            EXISTS (
+                SELECT 1 FROM moderation_filtered_messages mfm
+                WHERE mfm.content_type = 'message'
+                  AND mfm.content_id = cm.id
+                  AND mfm.layer = 'report'
+            )
+            OR NOT EXISTS (
             SELECT 1 FROM moderation_filtered_messages mfm
             WHERE mfm.content_type = 'message' AND mfm.content_id = cm.id
-        )
+        ))
     )
     + (
         SELECT COUNT(*)
         FROM message_replies mr
         JOIN conversation_messages cm ON mr.message_id = cm.id
         WHERE cm.conversation_id = c.id
-        AND NOT EXISTS (
+        AND (
+            EXISTS (
+                SELECT 1 FROM moderation_filtered_messages mfm
+                WHERE mfm.content_type = 'message'
+                  AND mfm.content_id = cm.id
+                  AND mfm.layer = 'report'
+            )
+            OR NOT EXISTS (
             SELECT 1 FROM moderation_filtered_messages mfm
             WHERE mfm.content_type = 'message' AND mfm.content_id = cm.id
-        )
-        AND NOT EXISTS (
+        ))
+        AND (
+            EXISTS (
+                SELECT 1 FROM moderation_filtered_messages mfm
+                WHERE mfm.content_type = 'reply'
+                  AND mfm.content_id = mr.id
+                  AND mfm.layer = 'report'
+            )
+            OR NOT EXISTS (
             SELECT 1 FROM moderation_filtered_messages mfm
             WHERE mfm.content_type = 'reply' AND mfm.content_id = mr.id
-        )
+        ))
     )
     AS reply_count,
     (SELECT COUNT(*) FROM conversation_hearts   ch  WHERE ch.conversation_id  = c.id) AS heart_count,
@@ -72,6 +106,18 @@ _MESSAGE_COLS = """
     m.conversation_id,
     m.body,
     m.is_deleted,
+    EXISTS (
+        SELECT 1 FROM moderation_reports mr
+        WHERE mr.content_type = 'message'
+          AND mr.content_id = m.id
+          AND mr.status = 'pending'
+    ) AS has_pending_report,
+    EXISTS (
+        SELECT 1 FROM moderation_filtered_messages mfm
+        WHERE mfm.content_type = 'message'
+          AND mfm.content_id = m.id
+          AND mfm.layer = 'report'
+    ) AS deleted_by_moderator,
     m.deleted_at,
     m.created_at,
     m.updated_at,
@@ -84,10 +130,17 @@ _MESSAGE_COLS = """
         SELECT COUNT(*)
         FROM message_replies mr
         WHERE mr.message_id = m.id
-        AND NOT EXISTS (
+        AND (
+            EXISTS (
+                SELECT 1 FROM moderation_filtered_messages mfm
+                WHERE mfm.content_type = 'reply'
+                  AND mfm.content_id = mr.id
+                  AND mfm.layer = 'report'
+            )
+            OR NOT EXISTS (
             SELECT 1 FROM moderation_filtered_messages mfm
             WHERE mfm.content_type = 'reply' AND mfm.content_id = mr.id
-        )
+        ))
     ) AS reply_count
 """
 
@@ -96,6 +149,18 @@ _REPLY_COLS = """
     r.message_id,
     r.body,
     r.is_deleted,
+    EXISTS (
+        SELECT 1 FROM moderation_reports mr
+        WHERE mr.content_type = 'reply'
+          AND mr.content_id = r.id
+          AND mr.status = 'pending'
+    ) AS has_pending_report,
+    EXISTS (
+        SELECT 1 FROM moderation_filtered_messages mfm
+        WHERE mfm.content_type = 'reply'
+          AND mfm.content_id = r.id
+          AND mfm.layer = 'report'
+    ) AS deleted_by_moderator,
     r.deleted_at,
     r.created_at,
     r.updated_at,
@@ -155,10 +220,17 @@ async def list_conversations(
             FROM conversations c
             LEFT JOIN public.users u ON u.id = c.author_id
             WHERE c.community_id = $1
-            AND NOT EXISTS (
+            AND (
+                EXISTS (
+                    SELECT 1 FROM moderation_filtered_messages mfm
+                    WHERE mfm.content_type = 'conversation'
+                      AND mfm.content_id = c.id
+                      AND mfm.layer = 'report'
+                )
+                OR NOT EXISTS (
                 SELECT 1 FROM moderation_filtered_messages mfm
                 WHERE mfm.content_type = 'conversation' AND mfm.content_id = c.id
-            )
+            ))
             {time_filter}
         )
         SELECT * FROM convs
@@ -185,10 +257,17 @@ async def get_conversation(
         FROM conversations c
         LEFT JOIN public.users u ON u.id = c.author_id
         WHERE c.id = $1
-        AND NOT EXISTS (
+        AND (
+            EXISTS (
+                SELECT 1 FROM moderation_filtered_messages mfm
+                WHERE mfm.content_type = 'conversation'
+                  AND mfm.content_id = c.id
+                  AND mfm.layer = 'report'
+            )
+            OR NOT EXISTS (
             SELECT 1 FROM moderation_filtered_messages mfm
             WHERE mfm.content_type = 'conversation' AND mfm.content_id = c.id
-        )
+        ))
     """
     return await conn.fetchrow(query, conversation_id, user_id)
 
@@ -203,10 +282,17 @@ async def list_messages(
     conditions = [
         "m.conversation_id = $1",
         """
-        NOT EXISTS (
+        (
+            EXISTS (
+                SELECT 1 FROM moderation_filtered_messages mfm
+                WHERE mfm.content_type = 'message'
+                  AND mfm.content_id = m.id
+                  AND mfm.layer = 'report'
+            )
+            OR NOT EXISTS (
             SELECT 1 FROM moderation_filtered_messages mfm
             WHERE mfm.content_type = 'message' AND mfm.content_id = m.id
-        )
+        ))
         """,
     ]
     params: list = [conversation_id, user_id]
@@ -473,18 +559,24 @@ def _author(record: asyncpg.Record) -> AuthorInfo | None:
 
 def record_to_conversation(record: asyncpg.Record) -> ConversationResponse:
     is_deleted = record["is_deleted"]
+    placeholder = (
+        REMOVED_BY_MODERATOR
+        if record["deleted_by_moderator"]
+        else REMOVED_BY_ORIGINAL_POSTER
+    )
     return ConversationResponse(
         id=record["id"],
         community_id=record["community_id"],
         author=_author(record),
         title=REMOVED_CONVERSATION_TITLE if is_deleted else record["title"],
-        body=REMOVED_BY_ORIGINAL_POSTER if is_deleted else record["body"],
+        body=placeholder if is_deleted else record["body"],
         prompt_type=record["prompt_type"],
         reply_count=record["reply_count"],
         heart_count=record["heart_count"],
         participant_count=record["participant_count"],
         is_hearted=record["is_hearted"],
         is_deleted=is_deleted,
+        has_pending_report=record["has_pending_report"],
         deleted_at=record["deleted_at"],
         created_at=record["created_at"],
         updated_at=record["updated_at"],
@@ -494,15 +586,21 @@ def record_to_conversation(record: asyncpg.Record) -> ConversationResponse:
 
 def record_to_message(record: asyncpg.Record) -> MessageResponse:
     is_deleted = record["is_deleted"]
+    placeholder = (
+        REMOVED_BY_MODERATOR
+        if record["deleted_by_moderator"]
+        else REMOVED_BY_ORIGINAL_POSTER
+    )
     return MessageResponse(
         id=record["id"],
         conversation_id=record["conversation_id"],
         author=_author(record),
-        body=REMOVED_BY_ORIGINAL_POSTER if is_deleted else record["body"],
+        body=placeholder if is_deleted else record["body"],
         reply_count=record["reply_count"],
         heart_count=record["heart_count"],
         is_hearted=record["is_hearted"],
         is_deleted=is_deleted,
+        has_pending_report=record["has_pending_report"],
         deleted_at=record["deleted_at"],
         created_at=record["created_at"],
         updated_at=record["updated_at"],
@@ -511,14 +609,20 @@ def record_to_message(record: asyncpg.Record) -> MessageResponse:
 
 def record_to_reply(record: asyncpg.Record) -> ReplyResponse:
     is_deleted = record["is_deleted"]
+    placeholder = (
+        REMOVED_BY_MODERATOR
+        if record["deleted_by_moderator"]
+        else REMOVED_BY_ORIGINAL_POSTER
+    )
     return ReplyResponse(
         id=record["id"],
         message_id=record["message_id"],
         author=_author(record),
-        body=REMOVED_BY_ORIGINAL_POSTER if is_deleted else record["body"],
+        body=placeholder if is_deleted else record["body"],
         heart_count=record["heart_count"],
         is_hearted=record["is_hearted"],
         is_deleted=is_deleted,
+        has_pending_report=record["has_pending_report"],
         deleted_at=record["deleted_at"],
         created_at=record["created_at"],
         updated_at=record["updated_at"],
@@ -562,10 +666,17 @@ async def list_replies(
             FROM message_replies r
             LEFT JOIN public.users u ON u.id = r.author_id
             WHERE r.message_id = $1
-            AND NOT EXISTS (
+            AND (
+                EXISTS (
+                    SELECT 1 FROM moderation_filtered_messages mfm
+                    WHERE mfm.content_type = 'reply'
+                      AND mfm.content_id = r.id
+                      AND mfm.layer = 'report'
+                )
+                OR NOT EXISTS (
                 SELECT 1 FROM moderation_filtered_messages mfm
                 WHERE mfm.content_type = 'reply' AND mfm.content_id = r.id
-            )
+            ))
         )
         SELECT * FROM ranked
         {cursor_condition}

@@ -9,8 +9,9 @@ def build_get_user_by_id_query(
 ) -> tuple[str, list]:
     params = [user_id, curr_user_id]
     query = """
-        SELECT u.*, c.requesting_id, c.status AS connection_status
+        SELECT u.*, users.is_admin, c.requesting_id, c.status AS connection_status
         FROM user_profiles u
+        JOIN public.users users ON users.id = u.id
         LEFT JOIN connections c ON (
             (c.requesting_id = $2 AND c.requested_id = u.id) OR
             (c.requested_id = $2 AND c.requesting_id = u.id)
@@ -79,8 +80,9 @@ def build_discover_profiles_query(
 
     where_clause += " AND ".join(conditions)
     query = f"""
-        SELECT u.*, c.requesting_id, c.status AS connection_status
+        SELECT u.*, users.is_admin, c.requesting_id, c.status AS connection_status
         FROM user_profiles u
+        JOIN public.users users ON users.id = u.id
         LEFT JOIN connections c ON (
             (c.requesting_id = $1 AND c.requested_id = u.id) OR
             (c.requested_id = $1 AND c.requesting_id = u.id)
