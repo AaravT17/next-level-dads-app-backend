@@ -1,13 +1,48 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Query, Body
+from typing import Literal
 from app.dependencies.auth import get_current_user
 from app.models.communities import CommunityResponse
 from app.models.users import CommunityMemberResponse
-from app.dependencies.db import get_db
+from app.dependencies.db import get_db, get_pool
+from app.moderation.models import ContentType
+from app.moderation.service import assert_not_banned, moderate_content
 import asyncpg
 from app.services.communities import (
     build_discover_communities_query,
     build_get_community_by_id_query,
     build_get_community_members_query,
+)
+from app.models.communities import (
+    ConversationCreate,
+    ConversationResponse,
+    MessageCreate,
+    MessageResponse,
+    ParticipantResponse,
+    ReplyCreate,
+    ReplyResponse,
+)
+from app.services.communities_service import (
+    list_conversations,
+    get_conversation,
+    list_messages,
+    list_participants,
+    list_replies,
+    heart_conversation,
+    unheart_conversation,
+    heart_message,
+    unheart_message,
+    heart_reply,
+    unheart_reply,
+    delete_conversation,
+    delete_message,
+    delete_reply,
+    start_conversation,
+    reply_to_conversation,
+    reply_to_message,
+    record_to_conversation,
+    record_to_message,
+    record_to_participant,
+    record_to_reply,
 )
 from uuid import UUID
 from datetime import datetime
@@ -181,4 +216,471 @@ async def leave_community(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to leave community. Please try again later.",
+        )
+
+
+@router.get("/{community_id}/conversations", response_model=list[ConversationResponse])
+async def get_community_conversations(
+    community_id: str,
+    sort: Literal['recent', 'popular', 'active'] = Query('recent'),
+    time_window: Literal['today', 'week', 'month', 'year', 'all'] = Query('all'),
+    cursor_id: str | None = Query(None),
+    cursor_last_activity_at: datetime | None = Query(None),
+    cursor_heart_count: int | None = Query(None),
+    cursor_reply_count: int | None = Query(None),
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        records = await list_conversations(
+            conn,
+            UUID(community_id),
+            UUID(user_id),
+            sort=sort,
+            time_window=time_window,
+            cursor_id=UUID(cursor_id) if cursor_id else None,
+            cursor_last_activity_at=cursor_last_activity_at,
+            cursor_heart_count=cursor_heart_count,
+            cursor_reply_count=cursor_reply_count,
+        )
+        return [record_to_conversation(r) for r in records]
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch conversations. Please try again later.",
+        )
+
+
+@router.post(
+    "/{community_id}/conversations",
+    response_model=ConversationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_conversation(
+    community_id: str,
+    payload: ConversationCreate,
+    background_tasks: BackgroundTasks,
+    conn: asyncpg.Connection = Depends(get_db),
+    pool: asyncpg.Pool = Depends(get_pool),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        uid = UUID(user_id)
+        cid = UUID(community_id)
+        await assert_not_banned(conn, uid)
+        conversation = await start_conversation(
+            conn, cid, uid, payload.title, payload.body, payload.prompt_type
+        )
+        background_tasks.add_task(
+            moderate_content,
+            pool,
+            ContentType.CONVERSATION,
+            conversation.id,
+            uid,
+            cid,
+            f"{payload.title}\n{payload.body}",
+        )
+        return conversation
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create conversation. Please try again later.",
+        )
+
+
+# ── Conversation-scoped router ─────────────────────────────────────────────
+
+conversations_router = APIRouter(
+    prefix="/api/conversations",
+    tags=["conversations"],
+)
+
+
+@conversations_router.get("/{conversation_id}", response_model=ConversationResponse)
+async def get_single_conversation(
+    conversation_id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        record = await get_conversation(conn, UUID(conversation_id), UUID(user_id))
+        if not record:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversation not found.",
+            )
+        return record_to_conversation(record)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch conversation. Please try again later.",
+        )
+
+
+@conversations_router.delete(
+    "/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_a_conversation(
+    conversation_id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        await delete_conversation(conn, UUID(conversation_id), UUID(user_id))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete conversation. Please try again later.",
+        )
+
+
+@conversations_router.get(
+    "/{conversation_id}/messages", response_model=list[MessageResponse]
+)
+async def get_conversation_messages(
+    conversation_id: str,
+    cursor_id: str | None = Query(None),
+    cursor_created_at: datetime | None = Query(None),
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        records = await list_messages(
+            conn,
+            UUID(conversation_id),
+            UUID(user_id),
+            cursor_id=UUID(cursor_id) if cursor_id else None,
+            cursor_created_at=cursor_created_at,
+        )
+        return [record_to_message(r) for r in records]
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch messages. Please try again later.",
+        )
+
+
+@conversations_router.post(
+    "/{conversation_id}/messages",
+    response_model=MessageResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_message(
+    conversation_id: str,
+    payload: MessageCreate,
+    background_tasks: BackgroundTasks,
+    conn: asyncpg.Connection = Depends(get_db),
+    pool: asyncpg.Pool = Depends(get_pool),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        uid = UUID(user_id)
+        await assert_not_banned(conn, uid)
+        message = await reply_to_conversation(
+            conn, UUID(conversation_id), uid, payload.body
+        )
+        background_tasks.add_task(
+            moderate_content,
+            pool,
+            ContentType.MESSAGE,
+            message.id,
+            uid,
+            None,
+            payload.body,
+        )
+        return message
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to post reply. Please try again later.",
+        )
+
+
+@conversations_router.get(
+    "/{conversation_id}/participants", response_model=list[ParticipantResponse]
+)
+async def get_conversation_participants(
+    conversation_id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        records = await list_participants(conn, UUID(conversation_id))
+        return [record_to_participant(r) for r in records]
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch participants. Please try again later.",
+        )
+
+
+@conversations_router.post(
+    "/{conversation_id}/heart", status_code=status.HTTP_204_NO_CONTENT
+)
+async def heart_a_conversation(
+    conversation_id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        uid = UUID(user_id)
+        await assert_not_banned(conn, uid)
+        await heart_conversation(conn, UUID(conversation_id), uid)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to heart conversation. Please try again later.",
+        )
+
+
+@conversations_router.delete(
+    "/{conversation_id}/heart", status_code=status.HTTP_204_NO_CONTENT
+)
+async def unheart_a_conversation(
+    conversation_id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        await unheart_conversation(conn, UUID(conversation_id), UUID(user_id))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to unheart conversation. Please try again later.",
+        )
+
+
+# ── Message-scoped router ──────────────────────────────────────────────────
+
+messages_router = APIRouter(
+    prefix="/api/messages",
+    tags=["messages"],
+)
+
+
+@messages_router.post("/{message_id}/heart", status_code=status.HTTP_204_NO_CONTENT)
+async def heart_a_message(
+    message_id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        uid = UUID(user_id)
+        await assert_not_banned(conn, uid)
+        await heart_message(conn, UUID(message_id), uid)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to heart message. Please try again later.",
+        )
+
+
+@messages_router.delete("/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_a_message(
+    message_id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        await delete_message(conn, UUID(message_id), UUID(user_id))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete message. Please try again later.",
+        )
+
+
+@messages_router.delete("/{message_id}/heart", status_code=status.HTTP_204_NO_CONTENT)
+async def unheart_a_message(
+    message_id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        await unheart_message(conn, UUID(message_id), UUID(user_id))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to unheart message. Please try again later.",
+        )
+
+
+@messages_router.get("/{message_id}/replies", response_model=list[ReplyResponse])
+async def get_message_replies(
+    message_id: str,
+    cursor_id: str | None = Query(None),
+    cursor_heart_count: int | None = Query(None),
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        records = await list_replies(
+            conn,
+            UUID(message_id),
+            UUID(user_id),
+            cursor_id=UUID(cursor_id) if cursor_id else None,
+            cursor_heart_count=cursor_heart_count,
+        )
+        return [record_to_reply(r) for r in records]
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch replies. Please try again later.",
+        )
+
+
+@messages_router.post(
+    "/{message_id}/replies",
+    response_model=ReplyResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_reply(
+    message_id: str,
+    payload: ReplyCreate,
+    background_tasks: BackgroundTasks,
+    conn: asyncpg.Connection = Depends(get_db),
+    pool: asyncpg.Pool = Depends(get_pool),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        uid = UUID(user_id)
+        await assert_not_banned(conn, uid)
+        reply = await reply_to_message(conn, UUID(message_id), uid, payload.body)
+        background_tasks.add_task(
+            moderate_content,
+            pool,
+            ContentType.REPLY,
+            reply.id,
+            uid,
+            None,
+            payload.body,
+        )
+        return reply
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to post reply. Please try again later.",
+        )
+
+
+# ── Reply-scoped router ────────────────────────────────────────────────────
+
+replies_router = APIRouter(
+    prefix="/api/replies",
+    tags=["replies"],
+)
+
+
+@replies_router.post("/{reply_id}/heart", status_code=status.HTTP_204_NO_CONTENT)
+async def heart_a_reply(
+    reply_id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        uid = UUID(user_id)
+        await assert_not_banned(conn, uid)
+        await heart_reply(conn, UUID(reply_id), uid)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to heart reply. Please try again later.",
+        )
+
+
+@replies_router.delete("/{reply_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_a_reply(
+    reply_id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        await delete_reply(conn, UUID(reply_id), UUID(user_id))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete reply. Please try again later.",
+        )
+
+
+@replies_router.delete("/{reply_id}/heart", status_code=status.HTTP_204_NO_CONTENT)
+async def unheart_a_reply(
+    reply_id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        await unheart_reply(conn, UUID(reply_id), UUID(user_id))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to unheart reply. Please try again later.",
         )
