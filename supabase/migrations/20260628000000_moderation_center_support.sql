@@ -27,6 +27,15 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS message_replies (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  message_id UUID NOT NULL REFERENCES conversation_messages(id) ON DELETE CASCADE,
+  author_id UUID REFERENCES public.users(id) ON DELETE SET NULL,
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS conversation_hearts (
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
@@ -39,6 +48,13 @@ CREATE TABLE IF NOT EXISTS message_hearts (
   user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (message_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS reply_hearts (
+  reply_id UUID NOT NULL REFERENCES message_replies(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (reply_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS conversation_participants (
@@ -194,6 +210,7 @@ ALTER TABLE conversation_messages         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE message_replies               ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conversation_hearts           ENABLE ROW LEVEL SECURITY;
 ALTER TABLE message_hearts                ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reply_hearts                  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conversation_participants     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE moderation_filtered_messages  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE moderation_reports            ENABLE ROW LEVEL SECURITY;

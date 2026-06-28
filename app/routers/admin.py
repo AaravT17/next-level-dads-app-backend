@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 import asyncpg
@@ -24,6 +25,7 @@ from app.moderation.repository import (
     get_user_activity_context_admin,
     get_user_report_for_action,
     filtered_message_exists,
+    deactivate_active_bans,
     insert_ban,
     insert_filtered_message,
     insert_notification,
@@ -36,6 +38,8 @@ from app.moderation.repository import (
     update_content_report_status,
     update_user_report_status,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/admin",
@@ -62,6 +66,7 @@ async def get_content_reports(
         records = await list_content_reports(conn, status_filter, limit, offset)
         return [AdminContentReportItem(**dict(r)) for r in records]
     except Exception:
+        logger.exception("Failed to fetch content reports")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch content reports.",
@@ -139,6 +144,7 @@ async def update_content_report(
     except HTTPException:
         raise
     except Exception:
+        logger.exception("Failed to action content report %s", report_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update report.",
@@ -160,6 +166,7 @@ async def get_user_reports(
         records = await list_user_reports(conn, status_filter, limit, offset)
         return [AdminUserReportItem(**dict(r)) for r in records]
     except Exception:
+        logger.exception("Failed to fetch user reports")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch user reports.",
@@ -206,6 +213,7 @@ async def update_user_report(
     except HTTPException:
         raise
     except Exception:
+        logger.exception("Failed to action user report %s", report_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update report.",
@@ -226,6 +234,7 @@ async def get_filtered_messages(
         records = await list_filtered_messages_admin(conn, limit, offset)
         return [AdminFilteredMessageItem(**dict(r)) for r in records]
     except Exception:
+        logger.exception("Failed to fetch filtered messages")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch filtered messages.",
@@ -257,6 +266,9 @@ async def get_content_context(
     except HTTPException:
         raise
     except Exception:
+        logger.exception(
+            "Failed to fetch content context for %s %s", content_type, content_id
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch content context.",
@@ -280,6 +292,7 @@ async def get_user_context(
     except HTTPException:
         raise
     except Exception:
+        logger.exception("Failed to fetch user context for %s", user_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch user context.",
@@ -300,6 +313,7 @@ async def get_active_bans(
         records = await list_active_bans_admin(conn, limit, offset)
         return [AdminBanItem(**dict(r)) for r in records]
     except Exception:
+        logger.exception("Failed to fetch bans")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch bans.",
@@ -313,12 +327,16 @@ async def create_ban(
     _admin: str = Depends(get_admin_user),
 ):
     try:
-        record = await insert_ban(
-            conn,
-            payload.user_id,
-            payload.reason,
-            payload.duration_hours,
-        )
+        async with conn.transaction():
+            # Replace any existing active ban so a user never accumulates
+            # overlapping bans (which would survive an admin lifting one).
+            await deactivate_active_bans(conn, payload.user_id)
+            record = await insert_ban(
+                conn,
+                payload.user_id,
+                payload.reason,
+                payload.duration_hours,
+            )
         user_name = await conn.fetchval(
             "SELECT name FROM public.users WHERE id = $1", payload.user_id
         )
@@ -331,6 +349,7 @@ async def create_ban(
             expires_at=record["expires_at"],
         )
     except Exception:
+        logger.exception("Failed to create ban for user %s", payload.user_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create ban.",
@@ -352,6 +371,7 @@ async def remove_ban(
     except HTTPException:
         raise
     except Exception:
+        logger.exception("Failed to lift ban %s", ban_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to lift ban.",

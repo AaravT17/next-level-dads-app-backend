@@ -694,12 +694,37 @@ async def get_user_activity_context_admin(
     }
 
 
+async def deactivate_active_bans(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+) -> None:
+    """Expire every currently-active ban for a user.
+
+    Keeps the invariant that a user has at most one active ban, so an admin
+    issuing a new ban replaces any existing one rather than stacking.
+    """
+    await conn.execute(
+        "UPDATE moderation_bans SET expires_at = NOW() "
+        "WHERE user_id = $1 AND expires_at > NOW()",
+        user_id,
+    )
+
+
 async def lift_ban(
     conn: asyncpg.Connection,
     ban_id: UUID,
 ) -> bool:
+    """Lift every active ban for the user that owns `ban_id`.
+
+    Lifting all of the user's active bans (not just the one row) guarantees the
+    user is actually unbanned even if overlapping ban rows exist.
+    """
     result = await conn.execute(
-        "UPDATE moderation_bans SET expires_at = NOW() WHERE id = $1",
+        """
+        UPDATE moderation_bans SET expires_at = NOW()
+        WHERE expires_at > NOW()
+          AND user_id = (SELECT user_id FROM moderation_bans WHERE id = $1)
+        """,
         ban_id,
     )
     return result.split()[-1] != "0"
