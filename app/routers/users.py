@@ -16,19 +16,21 @@ from app.config.constants import (
     MAX_CITY_LENGTH,
     MAX_BIO_LENGTH,
 )
-from app.dependencies.auth import get_current_user
-from app.models.users import UserResponse, UserProfileResponse, UserStatsResponse
+from app.dependencies.auth import get_current_user, get_consented_user
+from app.models.users import MeResponse, UserProfileResponse, UserStatsResponse, UpdatePreferencesRequest
 from app.models.communities import CommunityResponse
 from app.models.events import EventResponse
 from app.utils.interests import normalize_interest
 from app.services.users import (
+    build_get_me_query,
+    build_get_user_profile_query,
     build_discover_profiles_query,
-    build_get_user_by_id_query,
     delete_avatar_from_storage,
 )
 from app.utils.users import resolve_connection_status
 from app.dependencies.db import get_db
 import asyncpg
+import json
 from datetime import datetime, date
 from uuid import UUID
 from app.services.communities import build_user_communities_query
@@ -38,14 +40,23 @@ from app.services.events import build_user_events_query
 router = APIRouter(prefix='/api/users', tags=['users'])
 
 
-@router.get('/me', response_model=UserResponse)
+def _is_18_or_older(dob: date) -> bool:
+    today = date.today()
+    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    return age >= 18
+
+
+@router.get('/me', response_model=MeResponse)
 async def get_curr_user(conn: asyncpg.Connection = Depends(get_db), user_id: str = Depends(get_current_user)):
     try:
-        query, params = build_get_user_by_id_query(user_id=user_id)
+        query, params = build_get_me_query(user_id=user_id)
         res = await conn.fetchrow(query, *params)
         if not res:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User not found.')
-        return UserResponse(**res)
+        data = dict(res)
+        data['preferences'] = json.loads(data['preferences'])
+        data['legal_acceptances'] = json.loads(data['legal_acceptances'])
+        return MeResponse(**data)
     except HTTPException as _:
         raise
     except Exception as _:
@@ -59,10 +70,10 @@ async def get_curr_user(conn: asyncpg.Connection = Depends(get_db), user_id: str
 async def get_user(
     id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
-        query, params = build_get_user_by_id_query(user_id=id, curr_user_id=user_id)
+        query, params = build_get_user_profile_query(user_id=id, curr_user_id=user_id)
         res = await conn.fetchrow(query, *params)
         if not res:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User not found.')
@@ -83,7 +94,7 @@ async def get_user(
         )
 
 
-@router.post('/', status_code=status.HTTP_201_CREATED, response_model=UserResponse)
+@router.post('/', status_code=status.HTTP_201_CREATED, response_model=MeResponse)
 async def create_user(
     name: str = Form(..., max_length=MAX_NAME_LENGTH),
     date_of_birth: date = Form(...),
@@ -93,9 +104,24 @@ async def create_user(
     avatar: UploadFile | None = File(None),
     interests: list[str] | None = Form(None),
     children_age_ranges: list[str] = Form(...),
+    accepted_terms: bool = Form(...),
+    accepted_privacy_policy: bool = Form(...),
+    marketing_emails_opt_in: bool = Form(False),
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
+    if not accepted_terms or not accepted_privacy_policy:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='You must accept the Terms of Service and Privacy Policy to create an account.',
+        )
+
+    if not _is_18_or_older(date_of_birth):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='You must be 18 or older to create an account.',
+        )
+
     supabase_admin = get_supabase_admin()
     avatar_url: str | None = None
     if avatar:
@@ -151,10 +177,25 @@ async def create_user(
                 SELECT $1, unnest($2::text[])
             """
             await conn.execute(query, *[UUID(user_id), children_age_ranges])
-            user_res = await conn.fetchrow('SELECT * FROM user_profiles WHERE id = $1', UUID(user_id))
-            return UserResponse(**user_res)
+            query = """
+                INSERT INTO user_preferences (user_id, marketing_emails_opt_in)
+                VALUES ($1, $2)
+            """
+            await conn.execute(query, *[UUID(user_id), marketing_emails_opt_in])
+            query = """
+                INSERT INTO user_legal_acceptances (user_id, document_type)
+                VALUES ($1, 'terms'), ($1, 'privacy_policy'), ($1, 'community_guidelines')
+            """
+            await conn.execute(query, UUID(user_id))
+            me_query, me_params = build_get_me_query(user_id=user_id)
+            user_res = await conn.fetchrow(me_query, *me_params)
+            if not user_res:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User not found.')
+            data = dict(user_res)
+            data['preferences'] = json.loads(data['preferences'])
+            data['legal_acceptances'] = json.loads(data['legal_acceptances'])
+            return MeResponse(**data)
     except asyncpg.exceptions.UniqueViolationError as _:
-        # unique violation can occur if user tries to create a profile when one already exists for them
         if avatar_url:
             await delete_avatar_from_storage(user_id)
         raise HTTPException(
@@ -180,7 +221,7 @@ async def get_discover_profiles(
     cursor_id: str | None = Query(None),
     cursor_created_at: datetime | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         uid = UUID(user_id)
@@ -218,7 +259,7 @@ async def get_user_communities(
     cursor_id: str | None = Query(None),
     cursor_created_at: datetime | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         query, params = build_user_communities_query(
@@ -244,7 +285,7 @@ async def get_user_events(
     cursor_id: str | None = Query(None),
     cursor_starts_at: datetime | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         query, params = build_user_events_query(
@@ -264,7 +305,7 @@ async def get_user_events(
         )
 
 
-@router.patch('/me', response_model=UserResponse)
+@router.patch('/me', response_model=MeResponse)
 async def update_user(
     name: str = Body(..., max_length=MAX_NAME_LENGTH),
     date_of_birth: date = Body(...),
@@ -274,21 +315,23 @@ async def update_user(
     interests: list[str] | None = Body(None),
     children_age_ranges: list[str] = Body(...),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
+    if not _is_18_or_older(date_of_birth):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='You must be 18 or older.',
+        )
+
     try:
-        # perform the profile update in a transaction to ensure atomicity of operations
         async with conn.transaction():
-            # delete existing interests for the user
             delete_query = """
                 DELETE FROM user_interests WHERE user_id = $1
             """
             await conn.execute(delete_query, *[UUID(user_id)])
             normalized_interests = []
             if interests is not None:
-                # normalize interests
                 normalized_interests = [normalize_interest(i) for i in interests]
-                # insert the interests into the user_interests table and get the resulting interest IDs
                 query = """
                     INSERT INTO interests (name)
                     SELECT unnest($1::text[])
@@ -297,26 +340,20 @@ async def update_user(
                 """
                 res = await conn.fetch(query, *[normalized_interests])
                 interest_ids = [r['id'] for r in res]
-                # insert into user_interests table
                 query = """
                     INSERT INTO user_interests (user_id, interest_id)
                     SELECT $1, unnest($2::uuid[])
                 """
                 await conn.execute(query, *[UUID(user_id), interest_ids])
-
-            # update the children's ages in the user_profiles table
-            # first, delete existing rows
             query = """
                 DELETE FROM user_children WHERE user_id = $1
             """
             await conn.execute(query, *[UUID(user_id)])
-            # then, insert new rows for each age range
             query = """
                 INSERT INTO user_children (user_id, age_range)
                 SELECT $1, unnest($2::text[])
             """
             await conn.execute(query, *[UUID(user_id), children_age_ranges])
-            # finally, update the rest of the profile fields in the user_profiles table
             query = """
                 UPDATE users
                 SET name = $1, date_of_birth = $2, city = $3, province = $4, about = $5, updated_at = NOW()
@@ -326,10 +363,14 @@ async def update_user(
                 query,
                 *[name, date_of_birth, city, province, about, UUID(user_id)],
             )
-            res = await conn.fetchrow('SELECT * FROM user_profiles WHERE id = $1', UUID(user_id))
+            me_query, me_params = build_get_me_query(user_id=user_id)
+            res = await conn.fetchrow(me_query, *me_params)
             if not res:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User not found.')
-            return UserResponse(**res)
+            data = dict(res)
+            data['preferences'] = json.loads(data['preferences'])
+            data['legal_acceptances'] = json.loads(data['legal_acceptances'])
+            return MeResponse(**data)
     except HTTPException as _:
         raise
     except Exception as _:
@@ -343,7 +384,7 @@ async def update_user(
 async def update_avatar(
     avatar: UploadFile = File(...),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     supabase_admin = get_supabase_admin()
     mime_type = avatar.content_type
@@ -378,10 +419,9 @@ async def update_avatar(
 @router.delete('/me/avatar', status_code=status.HTTP_204_NO_CONTENT)
 async def delete_avatar(
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
-        # set avatar_url to NULL in DB before deleting from storage to prevent broken image links in case storage deletion succeeds but DB update fails
         query = """
             UPDATE users SET avatar_url = NULL WHERE id = $1
         """
@@ -398,7 +438,7 @@ async def delete_avatar(
 
 @router.delete('/me', status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     supabase_admin = get_supabase_admin()
     try:
@@ -413,13 +453,13 @@ async def delete_user(
 
 @router.get('/me/stats', response_model=UserStatsResponse)
 async def get_user_stats(
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
     try:
         query = """
             SELECT
-                (SELECT COUNT(*) FROM connections WHERE status = 'accepted' 
+                (SELECT COUNT(*) FROM connections WHERE status = 'accepted'
                     AND (requesting_id = $1 OR requested_id = $1)) AS connections,
                 (SELECT COUNT(*) FROM connections WHERE status = 'pending' AND requested_id = $1) AS requests,
                 (SELECT COUNT(*) FROM community_members WHERE user_id = $1) AS communities_joined,
@@ -433,4 +473,43 @@ async def get_user_stats(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Failed to fetch user stats. Please try again later.',
+        )
+
+
+@router.post('/me/legal-acceptances', status_code=status.HTTP_204_NO_CONTENT)
+async def accept_legal_documents(
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        query = """
+            INSERT INTO user_legal_acceptances (user_id, document_type)
+            VALUES ($1, 'terms'), ($1, 'privacy_policy')
+            ON CONFLICT (user_id, document_type) DO UPDATE SET accepted_at = NOW()
+        """
+        await conn.execute(query, UUID(user_id))
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to record legal acceptances. Please try again later.',
+        )
+
+
+@router.patch('/me/preferences', status_code=status.HTTP_204_NO_CONTENT)
+async def update_preferences(
+    body: UpdatePreferencesRequest,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_consented_user),
+):
+    try:
+        query = """
+            UPDATE user_preferences
+            SET marketing_emails_opt_in = $1, updated_at = NOW()
+            WHERE user_id = $2
+        """
+        await conn.execute(query, body.marketing_emails_opt_in, UUID(user_id))
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to update preferences. Please try again later.',
         )

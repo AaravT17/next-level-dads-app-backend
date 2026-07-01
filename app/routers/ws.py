@@ -1,5 +1,5 @@
 from fastapi import APIRouter, status, Query, WebSocket, WebSocketDisconnect
-from app.utils.auth import verify_token
+from app.utils.auth import verify_token, check_consent
 from app.ws.connection_manager import connect, disconnect
 from app.config.redis import publish
 from app.services.chats import mark_chat_read
@@ -16,6 +16,12 @@ router = APIRouter(
 async def chat_websocket(ws: WebSocket, token: str = Query(...), connection_id: str = Query(...)):
     user_id = await verify_token(token)
     if not user_id:
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    async with ws.app.state.pool.acquire() as conn:
+        consented = await check_consent(conn, user_id)
+    if not consented:
         await ws.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 

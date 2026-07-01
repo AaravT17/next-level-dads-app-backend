@@ -3,7 +3,7 @@ from uuid import UUID
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_consented_user
 from app.dependencies.db import get_db
 from app.moderation.models import (
     BanStatusResponse,
@@ -36,7 +36,7 @@ router = APIRouter(
 async def create_report(
     payload: ReportCreate,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     """Report a conversation, message or reply for manual review."""
     try:
@@ -62,7 +62,7 @@ async def create_report(
 @router.get("/ban", response_model=BanStatusResponse)
 async def get_my_ban(
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     """Report whether the current user is under an active posting ban."""
     try:
@@ -84,7 +84,7 @@ async def get_my_ban(
 async def get_notifications(
     unread_only: bool = Query(False),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     """List the current user's moderation notifications (newest first)."""
     try:
@@ -106,7 +106,7 @@ async def get_notifications(
 async def read_notification(
     notification_id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     """Mark a single notification as read."""
     try:
@@ -128,7 +128,7 @@ async def read_notification(
 )
 async def read_all_notifications(
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     """Mark all of the current user's notifications as read."""
     try:
@@ -150,7 +150,7 @@ async def read_all_notifications(
 async def create_user_report(
     payload: UserReportCreate,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     """Report another user for review by admins."""
     if str(payload.reported_id) == user_id:

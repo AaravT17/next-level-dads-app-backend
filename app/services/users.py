@@ -4,12 +4,38 @@ from datetime import datetime
 from uuid import UUID
 
 
-def build_get_user_by_id_query(user_id: str, curr_user_id: str | None = None) -> tuple[str, list]:
+def build_get_me_query(user_id: str) -> tuple[str, list]:
+    params = [user_id]
+    query = """
+        SELECT
+            up.*,
+            u.is_admin,
+            json_build_object(
+                'marketing_emails_opt_in', COALESCE(pref.marketing_emails_opt_in, FALSE)
+            )::jsonb AS preferences,
+            json_build_object(
+                'terms', EXISTS(
+                    SELECT 1 FROM user_legal_acceptances ula
+                    WHERE ula.user_id = up.id AND ula.document_type = 'terms'
+                ),
+                'privacy_policy', EXISTS(
+                    SELECT 1 FROM user_legal_acceptances ula
+                    WHERE ula.user_id = up.id AND ula.document_type = 'privacy_policy'
+                )
+            )::jsonb AS legal_acceptances
+        FROM user_profiles up
+        JOIN public.users u ON u.id = up.id
+        LEFT JOIN user_preferences pref ON pref.user_id = up.id
+        WHERE up.id = $1
+    """
+    return query, params
+
+
+def build_get_user_profile_query(user_id: str, curr_user_id: str) -> tuple[str, list]:
     params = [user_id, curr_user_id]
     query = """
-        SELECT u.*, users.is_admin, c.requesting_id, c.status AS connection_status
+        SELECT u.*, c.requesting_id, c.status AS connection_status
         FROM user_profiles u
-        JOIN public.users users ON users.id = u.id
         LEFT JOIN connections c ON (
             (c.requesting_id = $2 AND c.requested_id = u.id) OR
             (c.requested_id = $2 AND c.requesting_id = u.id)
@@ -82,9 +108,8 @@ def build_discover_profiles_query(
 
     where_clause += ' AND '.join(conditions)
     query = f"""
-        SELECT u.*, users.is_admin, c.requesting_id, c.status AS connection_status
+        SELECT u.*, c.requesting_id, c.status AS connection_status
         FROM user_profiles u
-        JOIN public.users users ON users.id = u.id
         LEFT JOIN connections c ON (
             (c.requesting_id = $1 AND c.requested_id = u.id) OR
             (c.requested_id = $1 AND c.requesting_id = u.id)
@@ -96,8 +121,3 @@ def build_discover_profiles_query(
     params.append(PROFILES_PAGE_LIMIT)
 
     return query, params
-
-
-# TODO: Discuss race conditions between WS event updating cache vs. API call to fetch new data, can we synchronize
-# cache updates via these two i.e. make web socket events wait for the API call to finish before updating the cache,
-# or vice versa?

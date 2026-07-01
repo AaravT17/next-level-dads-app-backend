@@ -5,7 +5,7 @@ from typing import Literal
 from datetime import datetime, date
 
 
-class UserResponse(BaseModel):
+class UserBase(BaseModel):
     id: UUID
     name: str = Field(max_length=MAX_NAME_LENGTH)
     age: int | None = Field(default=None, ge=0, le=200)
@@ -16,19 +16,37 @@ class UserResponse(BaseModel):
     avatar_url: str | None
     interests: list[str] = []
     children: list[str] = []
+
+
+class PreferencesData(BaseModel):
+    marketing_emails_opt_in: bool = False
+
+
+class LegalAcceptancesData(BaseModel):
+    terms: bool = False
+    privacy_policy: bool = False
+
+
+class MeResponse(UserBase):
     is_admin: bool = False
+    preferences: PreferencesData
+    legal_acceptances: LegalAcceptancesData
 
 
-class UserProfileResponse(UserResponse):
+class UserProfileResponse(UserBase):
     created_at: datetime
     connection_status: Literal['pending_incoming', 'pending_outgoing', 'connected', 'blocked'] | None = None
 
 
 # TODO: The CommunityMemberResponse model contains fields not required/used by the frontend, can be trimmed
-class CommunityMemberResponse(UserResponse):
+class CommunityMemberResponse(UserBase):
     created_at: datetime
     joined_at: datetime
     role: Literal['admin', 'member'] = Field(default='member')
+
+
+class UpdatePreferencesRequest(BaseModel):
+    marketing_emails_opt_in: bool
 
 
 class UserStatsResponse(BaseModel):

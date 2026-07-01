@@ -49,6 +49,18 @@ def clear_refresh_cookie(response: Response):
     )
 
 
+async def check_consent(conn, user_id: str) -> bool:
+    return await conn.fetchval(
+        """
+        SELECT
+            EXISTS (SELECT 1 FROM user_legal_acceptances WHERE user_id = $1 AND document_type = 'terms')
+            AND
+            EXISTS (SELECT 1 FROM user_legal_acceptances WHERE user_id = $1 AND document_type = 'privacy_policy')
+        """,
+        user_id,
+    )
+
+
 async def verify_token(token: str) -> str | None:
     supabase = get_supabase()
     try:

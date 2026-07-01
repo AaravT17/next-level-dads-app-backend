@@ -1,6 +1,6 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Query, Body
 from typing import Literal
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_consented_user
 from app.models.communities import CommunityResponse
 from app.models.users import CommunityMemberResponse
 from app.dependencies.db import get_db, get_pool
@@ -59,7 +59,7 @@ async def get_communities(
     cursor_id: str | None = None,
     cursor_created_at: datetime | None = None,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         query, params = build_discover_communities_query(
@@ -89,7 +89,7 @@ async def create_community(
     name: str = Body(..., max_length=100),
     description: str | None = Body(None, max_length=500),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         async with conn.transaction():
@@ -119,7 +119,7 @@ async def create_community(
 async def get_community_by_id(
     id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         query, params = build_get_community_by_id_query(
@@ -152,7 +152,7 @@ async def get_community_members(
     cursor_id: str | None = Query(None),
     cursor_joined_at: datetime | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         query, params = build_get_community_members_query(
@@ -180,7 +180,7 @@ async def get_community_members(
 async def join_community(
     id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         id, user_id = UUID(id), UUID(user_id)
@@ -202,7 +202,7 @@ async def join_community(
 async def leave_community(
     id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         id, user_id = UUID(id), UUID(user_id)
@@ -229,7 +229,7 @@ async def get_community_conversations(
     cursor_heart_count: int | None = Query(None),
     cursor_reply_count: int | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         records = await list_conversations(
@@ -266,7 +266,7 @@ async def create_conversation(
     background_tasks: BackgroundTasks,
     conn: asyncpg.Connection = Depends(get_db),
     pool: asyncpg.Pool = Depends(get_pool),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         uid = UUID(user_id)
@@ -308,7 +308,7 @@ conversations_router = APIRouter(
 async def get_single_conversation(
     conversation_id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         record = await get_conversation(conn, UUID(conversation_id), UUID(user_id))
@@ -335,7 +335,7 @@ async def get_single_conversation(
 async def delete_a_conversation(
     conversation_id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         await delete_conversation(conn, UUID(conversation_id), UUID(user_id))
@@ -358,7 +358,7 @@ async def get_conversation_messages(
     cursor_id: str | None = Query(None),
     cursor_created_at: datetime | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         records = await list_messages(
@@ -391,7 +391,7 @@ async def create_message(
     background_tasks: BackgroundTasks,
     conn: asyncpg.Connection = Depends(get_db),
     pool: asyncpg.Pool = Depends(get_pool),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         uid = UUID(user_id)
@@ -426,7 +426,7 @@ async def create_message(
 async def get_conversation_participants(
     conversation_id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         records = await list_participants(conn, UUID(conversation_id))
@@ -448,7 +448,7 @@ async def get_conversation_participants(
 async def heart_a_conversation(
     conversation_id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         uid = UUID(user_id)
@@ -471,7 +471,7 @@ async def heart_a_conversation(
 async def unheart_a_conversation(
     conversation_id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         await unheart_conversation(conn, UUID(conversation_id), UUID(user_id))
@@ -498,7 +498,7 @@ messages_router = APIRouter(
 async def heart_a_message(
     message_id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         uid = UUID(user_id)
@@ -519,7 +519,7 @@ async def heart_a_message(
 async def delete_a_message(
     message_id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         await delete_message(conn, UUID(message_id), UUID(user_id))
@@ -538,7 +538,7 @@ async def delete_a_message(
 async def unheart_a_message(
     message_id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         await unheart_message(conn, UUID(message_id), UUID(user_id))
@@ -559,7 +559,7 @@ async def get_message_replies(
     cursor_id: str | None = Query(None),
     cursor_heart_count: int | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         records = await list_replies(
@@ -592,7 +592,7 @@ async def create_reply(
     background_tasks: BackgroundTasks,
     conn: asyncpg.Connection = Depends(get_db),
     pool: asyncpg.Pool = Depends(get_pool),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         uid = UUID(user_id)
@@ -631,7 +631,7 @@ replies_router = APIRouter(
 async def heart_a_reply(
     reply_id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         uid = UUID(user_id)
@@ -652,7 +652,7 @@ async def heart_a_reply(
 async def delete_a_reply(
     reply_id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         await delete_reply(conn, UUID(reply_id), UUID(user_id))
@@ -671,7 +671,7 @@ async def delete_a_reply(
 async def unheart_a_reply(
     reply_id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         await unheart_reply(conn, UUID(reply_id), UUID(user_id))
