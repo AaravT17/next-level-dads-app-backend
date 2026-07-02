@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_consented_user
 from app.models.events import EventResponse
 from app.dependencies.db import get_db
 from typing import Literal
@@ -23,7 +23,7 @@ async def get_events(
     cursor_id: str | None = None,
     cursor_starts_at: datetime | None = None,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         query, params = build_discover_events_query(
@@ -49,7 +49,7 @@ async def get_events(
 async def get_event_by_id(
     id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         query, params = build_get_event_by_id_query(id=UUID(id), user_id=UUID(user_id))
@@ -74,7 +74,7 @@ async def get_event_by_id(
 async def register_for_event(
     id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     # TODO: For paid events, integrate with payment gateway and only register user after successful payment
     try:
@@ -115,7 +115,7 @@ async def register_for_event(
 async def unregister_from_event(
     id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
 ):
     try:
         id, user_id = UUID(id), UUID(user_id)

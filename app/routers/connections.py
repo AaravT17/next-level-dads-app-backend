@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_consented_user
 from app.dependencies.db import get_db
 import asyncpg
 from app.services.connections import (
@@ -27,7 +27,7 @@ async def get_connected(
     name: str | None = Query(None),
     cursor_id: UUID | None = Query(None),
     cursor_updated_at: datetime | None = Query(None),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
     try:
@@ -55,7 +55,7 @@ async def get_requests(
     name: str | None = Query(None),
     cursor_id: UUID | None = Query(None),
     cursor_updated_at: datetime | None = Query(None),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
     try:
@@ -83,7 +83,7 @@ async def get_requested(
     name: str | None = Query(None),
     cursor_id: UUID | None = Query(None),
     cursor_updated_at: datetime | None = Query(None),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
     try:
@@ -114,7 +114,7 @@ async def get_requested(
 async def send_connection_request(
     user_id: str,
     response: Response,
-    curr_user_id: str = Depends(get_current_user),
+    curr_user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
     try:
@@ -173,7 +173,7 @@ async def send_connection_request(
 @router.patch("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def accept_connection_request(
     user_id: str,
-    curr_user_id: str = Depends(get_current_user),
+    curr_user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
     try:
@@ -203,14 +203,22 @@ async def accept_connection_request(
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_connection(
     user_id: str,
-    curr_user_id: str = Depends(get_current_user),
+    curr_user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
     try:
         user_id, curr_user_id = UUID(user_id), UUID(curr_user_id)
         query = """
-            DELETE FROM connections
-            WHERE (requesting_id = $1 AND requested_id = $2) OR (requesting_id = $2 AND requested_id = $1)
+            WITH remove_connection AS (
+                DELETE FROM connections
+                WHERE (requesting_id = $1 AND requested_id = $2) OR (requesting_id = $2 AND requested_id = $1)
+            )
+            DELETE FROM chats
+            WHERE type = 'dm'
+            AND (
+                (dm_user_1 = $1 AND dm_user_2 = $2) OR
+                (dm_user_1 = $2 AND dm_user_2 = $1)
+            )
         """
         await conn.execute(query, *[curr_user_id, user_id])
         return
