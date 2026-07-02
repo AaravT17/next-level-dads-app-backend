@@ -30,22 +30,26 @@ def strip_email(email: str) -> str:
 
 
 def set_refresh_cookie(response: Response, refresh_token: str):
+    is_prod = os.getenv('ENV') == 'production'
     response.set_cookie(
         key='refresh_token',
         value=refresh_token,
         httponly=True,
-        secure=os.getenv('ENV') == 'production',
-        samesite='None' if os.getenv('ENV') == 'production' else 'lax',
+        secure=is_prod,
+        samesite='lax',
+        domain='.nextleveldads.ca' if is_prod else None,
         max_age=60 * 60 * 24 * REFRESH_TOKEN_EXPIRY_DAYS,
     )
 
 
 def clear_refresh_cookie(response: Response):
+    is_prod = os.getenv('ENV') == 'production'
     response.delete_cookie(
         key='refresh_token',
         httponly=True,
-        secure=os.getenv('ENV') == 'production',
-        samesite='None' if os.getenv('ENV') == 'production' else 'lax',
+        secure=is_prod,
+        samesite='lax',
+        domain='.nextleveldads.ca' if is_prod else None,
     )
 
 
