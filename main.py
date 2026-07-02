@@ -20,7 +20,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 from contextlib import asynccontextmanager
 from app.config.supabase import init_supabase
-from app.moderation.toxicity import warmup as warmup_moderation
 import asyncio
 import asyncpg
 
@@ -40,9 +39,6 @@ async def lifespan(app: FastAPI):
         await close_pubsub()
         await close_redis()
         raise SystemExit(1)
-    # Load the toxicity model in the background so it's ready for the first
-    # post without blocking startup.
-    asyncio.create_task(warmup_moderation())
     yield
     await close_pubsub()
     await close_redis()
