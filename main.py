@@ -14,14 +14,15 @@ from app.routers.moderation import router as moderation_router
 from app.routers.admin import router as admin_router
 from app.routers.chats import router as chats_router
 from app.routers.ws import router as ws_router
-from app.config.redis import init_redis, close_redis
+from app.config.redis import init_redis, close_redis, get_redis
 from app.ws.pubsub import init_pubsub, close_pubsub
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from contextlib import asynccontextmanager
 from app.config.supabase import init_supabase
-import asyncio
 import asyncpg
+from fastapi_limiter import FastAPILimiter
+from app.config.rate_limits import is_production
 
 
 @asynccontextmanager
@@ -35,12 +36,19 @@ async def lifespan(app: FastAPI):
             ssl='require',
             statement_cache_size=0,
         )
+        if is_production():
+            await FastAPILimiter.init(get_redis())
     except Exception as _:
         await close_pubsub()
         await close_redis()
+        pool = getattr(app.state, 'pool', None)
+        if pool:
+            await pool.close()
         raise SystemExit(1)
     yield
     await close_pubsub()
+    if is_production():
+        await FastAPILimiter.close()
     await close_redis()
     await app.state.pool.close()
 
