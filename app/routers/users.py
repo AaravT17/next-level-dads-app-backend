@@ -1,13 +1,21 @@
 from fastapi import (
     APIRouter,
-    HTTPException,
-    status,
     Depends,
     File,
     Form,
+    HTTPException,
+    Query,
     UploadFile,
     Body,
-    Query,
+    status,
+    Request,
+)
+from app.config.rate_limits import (
+    CreateProfileLimiter,
+    DiscoverProfilesLimiter,
+    UpdateAvatarLimiter,
+    UpdateProfileLimiter,
+    is_production,
 )
 from app.config.supabase import get_supabase_admin
 from app.config.constants import (
@@ -94,8 +102,16 @@ async def get_user(
         )
 
 
-@router.post('/', status_code=status.HTTP_201_CREATED, response_model=MeResponse)
+@router.post(
+    '/',
+    status_code=status.HTTP_201_CREATED,
+    response_model=MeResponse,
+    dependencies=[Depends(get_current_user), Depends(CreateProfileLimiter())]
+    if is_production()
+    else [Depends(get_current_user)],
+)
 async def create_user(
+    request: Request,
     name: str = Form(..., max_length=MAX_NAME_LENGTH),
     date_of_birth: date = Form(...),
     city: str = Form(..., max_length=MAX_CITY_LENGTH),
@@ -108,8 +124,8 @@ async def create_user(
     accepted_privacy_policy: bool = Form(...),
     marketing_emails_opt_in: bool = Form(False),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
 ):
+    user_id = request.state.user_id
     if not accepted_terms or not accepted_privacy_policy:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -211,8 +227,15 @@ async def create_user(
         )
 
 
-@router.get('/', response_model=list[UserProfileResponse])
+@router.get(
+    '/',
+    response_model=list[UserProfileResponse],
+    dependencies=[Depends(get_consented_user), Depends(DiscoverProfilesLimiter())]
+    if is_production()
+    else [Depends(get_consented_user)],
+)
 async def get_discover_profiles(
+    request: Request,
     interests: list[str] | None = Query(None),
     children_age_ranges: list[str] | None = Query(None),
     provinces: list[str] | None = Query(None),
@@ -221,10 +244,9 @@ async def get_discover_profiles(
     cursor_id: str | None = Query(None),
     cursor_created_at: datetime | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
 ):
     try:
-        uid = UUID(user_id)
+        uid = UUID(request.state.user_id)
         query, params = build_discover_profiles_query(
             user_id=uid,
             interests=interests,
@@ -305,8 +327,15 @@ async def get_user_events(
         )
 
 
-@router.patch('/me', response_model=MeResponse)
+@router.patch(
+    '/me',
+    response_model=MeResponse,
+    dependencies=[Depends(get_consented_user), Depends(UpdateProfileLimiter())]
+    if is_production()
+    else [Depends(get_consented_user)],
+)
 async def update_user(
+    request: Request,
     name: str = Body(..., max_length=MAX_NAME_LENGTH),
     date_of_birth: date = Body(...),
     city: str = Body(..., max_length=MAX_CITY_LENGTH),
@@ -315,8 +344,8 @@ async def update_user(
     interests: list[str] | None = Body(None),
     children_age_ranges: list[str] = Body(...),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
 ):
+    user_id = request.state.user_id
     if not _is_18_or_older(date_of_birth):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -380,12 +409,18 @@ async def update_user(
         )
 
 
-@router.put('/me/avatar')
+@router.put(
+    '/me/avatar',
+    dependencies=[Depends(get_consented_user), Depends(UpdateAvatarLimiter())]
+    if is_production()
+    else [Depends(get_consented_user)],
+)
 async def update_avatar(
+    request: Request,
     avatar: UploadFile = File(...),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
 ):
+    user_id = request.state.user_id
     supabase_admin = get_supabase_admin()
     mime_type = avatar.content_type
     if not mime_type or mime_type not in IMAGE_MIME_TO_EXT:

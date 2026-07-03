@@ -10,15 +10,15 @@ from app.services.events import build_discover_events_query, build_get_event_by_
 
 
 router = APIRouter(
-    prefix="/api/events",
-    tags=["events"],
+    prefix='/api/events',
+    tags=['events'],
 )
 
 
-@router.get("/", response_model=list[EventResponse])
+@router.get('/', response_model=list[EventResponse])
 async def get_events(
     name: str | None = None,
-    event_type: Literal["local", "virtual"] | None = Query(default=None, alias="type"),
+    event_type: Literal['local', 'virtual'] | None = Query(default=None, alias='type'),
     is_free: bool | None = None,
     cursor_id: str | None = None,
     cursor_starts_at: datetime | None = None,
@@ -41,11 +41,11 @@ async def get_events(
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch events. Please try again later.",
+            detail='Failed to fetch events. Please try again later.',
         )
 
 
-@router.get("/{id}", response_model=EventResponse)
+@router.get('/{id}', response_model=EventResponse)
 async def get_event_by_id(
     id: str,
     conn: asyncpg.Connection = Depends(get_db),
@@ -55,9 +55,7 @@ async def get_event_by_id(
         query, params = build_get_event_by_id_query(id=UUID(id), user_id=UUID(user_id))
         res = await conn.fetchrow(query, *params)
         if not res:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Event not found')
         return EventResponse(**dict(res))
     except HTTPException as _:
         raise
@@ -66,11 +64,11 @@ async def get_event_by_id(
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch event details. Please try again later.",
+            detail='Failed to fetch event details. Please try again later.',
         )
 
 
-@router.post("/{id}/attendees", status_code=status.HTTP_204_NO_CONTENT)
+@router.post('/{id}/attendees', status_code=status.HTTP_204_NO_CONTENT)
 async def register_for_event(
     id: str,
     conn: asyncpg.Connection = Depends(get_db),
@@ -85,15 +83,13 @@ async def register_for_event(
         """
         res = await conn.fetchval(query, *[id], column=0)
         if res is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Event not found')
         price = float(res)
         # for now, if the event is paid, do not allow registration through this endpoint
         if price > 0:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Cannot register for paid events through this endpoint.",
+                detail='Cannot register for paid events through this endpoint.',
             )
         query = """
             INSERT INTO event_attendees (event_id, user_id, joined_at)
@@ -107,11 +103,11 @@ async def register_for_event(
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to register for event. Please try again later.",
+            detail='Failed to register for event. Please try again later.',
         )
 
 
-@router.delete("/{id}/attendees", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete('/{id}/attendees', status_code=status.HTTP_204_NO_CONTENT)
 async def unregister_from_event(
     id: str,
     conn: asyncpg.Connection = Depends(get_db),
@@ -128,5 +124,5 @@ async def unregister_from_event(
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to unregister from event. Please try again later.",
+            detail='Failed to unregister from event. Please try again later.',
         )
