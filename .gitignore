@@ -11,3 +11,5 @@ AGENT.md
 
 # Supabase CLI
 supabase/.temp/
+venv/
+venv-wsl/
