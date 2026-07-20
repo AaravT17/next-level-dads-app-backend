@@ -18,15 +18,6 @@ from app.routers.organizations import router as organizations_router
 from app.routers.organization_chats import router as organization_chats_router
 from app.routers import organization_chats
 from app.routers.partner_applications import router as partner_applications_router
-from app.routers import organization_chats
-from app.routers.partner_applications import router as partner_applications_router
-from app.routers import organization_chats
-from app.routers.partner_applications import router as partner_applications_router
-from app.routers import organization_chats
-from app.routers.partner_applications import router as partner_applications_router
-from app.routers import organization_chats
-from app.routers.partner_applications import router as partner_applications_router
-from app.routers import organization_chats
 from app.config.redis import init_redis, close_redis, get_redis
 from app.routers.organizations_events import router as organizations_events_router
 from app.config.redis import init_redis, close_redis
@@ -38,8 +29,7 @@ from app.config.supabase import init_supabase
 import asyncpg
 from fastapi_limiter import FastAPILimiter
 from app.config.rate_limits import is_production
-from app.routers.organizations import router as organizations_router
-from app.routers.organizations_events import router as organizations_events_router
+
 
 
 @asynccontextmanager
