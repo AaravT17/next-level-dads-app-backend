@@ -133,8 +133,8 @@ async def refresh_token(request: Request, response: Response):
         )
 
 
-@router.post('/register-partner', dependencies=[Depends(RegisterLimiter())] if is_production() else [])
-async def register_partner(credentials: RegisterRequest):
+@router.post('/register/organizations', dependencies=[Depends(RegisterLimiter())] if is_production() else [])
+async def register_organization(credentials: RegisterRequest):
     supabase = get_supabase()
     supabase_admin = get_supabase_admin()
     try:
@@ -145,7 +145,8 @@ async def register_partner(credentials: RegisterRequest):
                 'options': {'email_redirect_to': f'{os.getenv("PARTNER_FRONTEND_BASE_URL")}/verify-email'},
             }
         )
-    except Exception as _:
+    except Exception as e:
+        print(e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Something went wrong. Please try again later.',
@@ -155,9 +156,10 @@ async def register_partner(credentials: RegisterRequest):
     try:
         await supabase_admin.auth.admin.update_user_by_id(
             user_id,
-            {'app_metadata': {'user_type': 'partner'}},
+            {'app_metadata': {'user_type': 'organizations'}},
         )
-    except Exception as _:
+    except Exception as e:
+        print(e)
         try:
             await supabase_admin.auth.admin.delete_user(user_id)
         except Exception as _:
