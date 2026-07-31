@@ -9,18 +9,18 @@ from app.models.organizations import (
     OrganizationApplicationCreate,
     OrganizationApplicationResponse,
     OrganizationApplicationDecision,
-    OrganizationAdminApplicationResponse,
-    InternalNoteCreate,
-    InternalNoteResponse,
-    OrganizationSummaryResponse
 )
-from app.services import organizations as organization_service
-from app.utils.organizations import parse_jsonb_fields
 
-router = APIRouter(prefix='/api/organizations', tags=['organizations'])
+router = APIRouter(prefix='/api/organizations/applications', tags=['organizations'])
 
 
-@router.post('/applications', response_model=OrganizationApplicationResponse, status_code=status.HTTP_201_CREATED)
+def _parse_jsonb_fields(row: dict) -> dict:
+    row['application_answers'] = json.loads(row['application_answers']) if row['application_answers'] else {}
+    row['notes'] = json.loads(row['notes']) if row['notes'] else None
+    return row
+
+
+@router.post('/', response_model=OrganizationApplicationResponse, status_code=status.HTTP_201_CREATED)
 async def submit_application(
     payload: OrganizationApplicationCreate,
     conn: asyncpg.Connection = Depends(get_db),
@@ -61,7 +61,7 @@ async def submit_application(
                 res['id'],
                 UUID(user_id),
             )
-            return OrganizationApplicationResponse(**parse_jsonb_fields(dict(res)))
+            return OrganizationApplicationResponse(**_parse_jsonb_fields(dict(res)))
     except Exception as e:
         print(e)
         raise HTTPException(
@@ -70,7 +70,7 @@ async def submit_application(
         )
 
 
-@router.get('/applications/me', response_model=OrganizationApplicationResponse)
+@router.get('/me', response_model=OrganizationApplicationResponse)
 async def get_my_application(
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_current_user),
@@ -87,7 +87,7 @@ async def get_my_application(
         res = await conn.fetchrow(query, UUID(user_id))
         if not res:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='No application found.')
-        return OrganizationApplicationResponse(**parse_jsonb_fields(dict(res)))
+        return OrganizationApplicationResponse(**_parse_jsonb_fields(dict(res)))
     except HTTPException:
         raise
     except Exception:
@@ -97,7 +97,7 @@ async def get_my_application(
         )
 
 
-@router.patch('/applications/me', response_model=OrganizationApplicationResponse)
+@router.patch('/me', response_model=OrganizationApplicationResponse)
 async def update_my_application(
     payload: OrganizationApplicationCreate,
     conn: asyncpg.Connection = Depends(get_db),
@@ -135,7 +135,7 @@ async def update_my_application(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail='No pending application found.',
             )
-        return OrganizationApplicationResponse(**parse_jsonb_fields(dict(res)))
+        return OrganizationApplicationResponse(**_parse_jsonb_fields(dict(res)))
     except HTTPException:
         raise
     except Exception:
@@ -144,41 +144,81 @@ async def update_my_application(
             detail='Failed to update application. Please try again later.',
         )
 
-# ── Admin Review  ─────────────────────────────────────────────
 
-@router.get('/', response_model=list[OrganizationSummaryResponse])
-async def list_organizations(
+@router.get('/', response_model=list[OrganizationApplicationResponse])
+async def list_applications(
     status_filter: str | None = Query(None, alias='status'),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user)
+    _admin: str = Depends(get_admin_user),
 ):
-    return await organization_service.list_organizations(conn=conn, status_filter=status_filter, limit=limit, offset=offset)
+    try:
+        query = """
+            SELECT *
+            FROM organizations
+            WHERE ($1::text IS NULL OR status = $1)
+            ORDER BY created_at DESC
+            LIMIT $2 OFFSET $3
+        """
+        res = await conn.fetch(query, status_filter, limit, offset)
+        return [OrganizationApplicationResponse(**_parse_jsonb_fields(dict(r))) for r in res]
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch applications. Please try again later.',
+        )
 
 
-@router.get('/{organization_id}', response_model=OrganizationAdminApplicationResponse)
-async def get_organization(
-    organization_id: UUID,
+@router.get('/{id}', response_model=OrganizationApplicationResponse)
+async def get_application(
+    id: UUID,
     conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user)
+    _admin: str = Depends(get_admin_user),
 ):
-    return await organization_service.get_organization(conn=conn, organization_id=organization_id)
+    try:
+        query = """
+            SELECT *
+            FROM organizations
+            WHERE id = $1
+        """
+        res = await conn.fetchrow(query, id)
+        if not res:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Application not found.')
+        return OrganizationApplicationResponse(**_parse_jsonb_fields(dict(res)))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch application. Please try again later.',
+        )
 
-@router.post('/{organization_id}/notes', response_model=InternalNoteResponse, status_code=status.HTTP_201_CREATED)
-async def add_internal_note(
-    organization_id: UUID,  
-    payload: InternalNoteCreate,
-    conn: asyncpg.Connection = Depends(get_db),
-    submitted_by: str = Depends(get_admin_user)
-):
-    return await organization_service.add_internal_note(conn=conn, organization_id=organization_id, submitted_by=UUID(submitted_by), content=payload.content)
 
-@router.patch('/{organization_id}/decision', response_model=OrganizationApplicationResponse)
+@router.patch('/{id}/decision', response_model=OrganizationApplicationResponse)
 async def decide_application(
-    organization_id: UUID,
+    id: UUID,
     payload: OrganizationApplicationDecision,
     conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user)
+    _admin: str = Depends(get_admin_user),
 ):
-    return await organization_service.decide_application(conn=conn, organization_id=organization_id, decision=payload)
+    try:
+        query = """
+            UPDATE organizations
+            SET status = $2,
+                approved_at = CASE WHEN $2 = 'approved' THEN now() ELSE approved_at END,
+                updated_at = now()
+            WHERE id = $1 AND status = 'pending'
+            RETURNING *
+        """
+        res = await conn.fetchrow(query, id, payload.status)
+        if not res:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='No pending application found.')
+        return OrganizationApplicationResponse(**_parse_jsonb_fields(dict(res)))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to record decision. Please try again later.',
+        )
