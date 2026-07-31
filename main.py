@@ -14,7 +14,7 @@ from app.routers.moderation import router as moderation_router
 from app.routers.admin import router as admin_router
 from app.routers.chats import router as chats_router
 from app.routers.ws import router as ws_router
-from app.routers.partner_applications import router as partner_applications_router
+from app.routers.organizations import router as organizations_router
 from app.config.redis import init_redis, close_redis, get_redis
 from app.ws.pubsub import init_pubsub, close_pubsub
 from fastapi.middleware.cors import CORSMiddleware
@@ -65,7 +65,7 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
-app.include_router(partner_applications_router)
+app.include_router(organizations_router)
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(interests_router)
