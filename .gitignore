@@ -5,3 +5,9 @@ __pycache__/
 .claude
 AGENT.md
 .vscode/
+
+# macOS
+.DS_Store
+
+# Supabase CLI
+supabase/.temp/
