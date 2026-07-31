@@ -14,6 +14,7 @@ from app.routers.moderation import router as moderation_router
 from app.routers.admin import router as admin_router
 from app.routers.chats import router as chats_router
 from app.routers.ws import router as ws_router
+from app.routers.organizations import router as organizations_router
 from app.config.redis import init_redis, close_redis, get_redis
 from app.ws.pubsub import init_pubsub, close_pubsub
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +24,7 @@ from app.config.supabase import init_supabase
 import asyncpg
 from fastapi_limiter import FastAPILimiter
 from app.config.rate_limits import is_production
+
 
 
 @asynccontextmanager
@@ -57,12 +59,13 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv('FRONTEND_BASE_URL')],
+    allow_origins=[os.getenv('FRONTEND_BASE_URL'), os.getenv('PARTNER_FRONTEND_BASE_URL')],
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
 )
 
+app.include_router(organizations_router)
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(interests_router)
