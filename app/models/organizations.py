@@ -18,12 +18,11 @@ class OrganizationApplicationCreate(BaseModel):
     contact_phone: str | None = None
     application_answers: dict[str, str] = {}
 
-
 class OrganizationApplicationResponse(BaseModel):
     id: UUID
-    admin_user_id: UUID | None
+    admin_user_id: UUID
     name: str
-    email: str
+    email: EmailStr
     phone: str | None
     city: str
     province: str
@@ -31,11 +30,11 @@ class OrganizationApplicationResponse(BaseModel):
     description: str
     contact_name: str
     contact_title: str | None
-    contact_email: str
+    contact_email: EmailStr
     contact_phone: str | None
     status: Literal['pending', 'approved', 'rejected']
     application_answers: dict[str, str]
-    notes: list[dict] | None
+    notes: list[dict]
     created_at: datetime
     updated_at: datetime
     approved_at: datetime | None
