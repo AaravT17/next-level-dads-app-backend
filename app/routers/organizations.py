@@ -11,14 +11,9 @@ from app.models.organizations import (
     OrganizationApplicationDecision,
 )
 from app.services import organizations as organization_service
+from app.utils.organizations import parse_jsonb_fields
 
 router = APIRouter(prefix='/api/organizations', tags=['organizations'])
-
-
-def _parse_jsonb_fields(row: dict) -> dict:
-    row['application_answers'] = json.loads(row['application_answers']) if row['application_answers'] else {}
-    row['notes'] = json.loads(row['notes']) if row['notes'] else None
-    return row
 
 
 @router.post('/applications', response_model=OrganizationApplicationResponse, status_code=status.HTTP_201_CREATED)
@@ -62,7 +57,7 @@ async def submit_application(
                 res['id'],
                 UUID(user_id),
             )
-            return OrganizationApplicationResponse(**_parse_jsonb_fields(dict(res)))
+            return OrganizationApplicationResponse(**parse_jsonb_fields(dict(res)))
     except Exception as e:
         print(e)
         raise HTTPException(
@@ -88,7 +83,7 @@ async def get_my_application(
         res = await conn.fetchrow(query, UUID(user_id))
         if not res:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='No application found.')
-        return OrganizationApplicationResponse(**_parse_jsonb_fields(dict(res)))
+        return OrganizationApplicationResponse(**parse_jsonb_fields(dict(res)))
     except HTTPException:
         raise
     except Exception:
@@ -136,7 +131,7 @@ async def update_my_application(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail='No pending application found.',
             )
-        return OrganizationApplicationResponse(**_parse_jsonb_fields(dict(res)))
+        return OrganizationApplicationResponse(**parse_jsonb_fields(dict(res)))
     except HTTPException:
         raise
     except Exception:
