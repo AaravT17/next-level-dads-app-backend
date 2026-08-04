@@ -120,7 +120,7 @@ def build_update_organization_event_decision_query(
                 ELSE jsonb_build_object(
                     'text', $3::text,
                     'created_by', COALESCE(
-                        admin_notes->>'created_by',
+                        admin_notes->> 'created_by',
                         $4::text
                     ),
                     'created_at', COALESCE(
@@ -131,7 +131,7 @@ def build_update_organization_event_decision_query(
                 )
             END
         WHERE id = $1
-          AND hosted_by_org_id IS NOT NULL
+            AND hosted_by_org_id IS NOT NULL
         RETURNING id, app_status, admin_notes
     """
     params = [event_id, status, admin_notes, admin_user_id]
