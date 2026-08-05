@@ -9,6 +9,10 @@ from app.models.organizations import (
     OrganizationApplicationCreate,
     OrganizationApplicationResponse,
     OrganizationApplicationDecision,
+    OrganizationAdminApplicationResponse,
+    InternalNoteCreate,
+    InternalNoteResponse,
+    OrganizationSummaryResponse
 )
 
 router = APIRouter(prefix='/api/organizations/applications', tags=['organizations'])
@@ -145,8 +149,8 @@ async def update_my_application(
         )
 
 
-@router.get('/', response_model=list[OrganizationApplicationResponse])
-async def list_applications(
+@router.get('/', response_model=list[OrganizationSummaryResponse])
+async def list_organizations(
     status_filter: str | None = Query(None, alias='status'),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -170,9 +174,9 @@ async def list_applications(
         )
 
 
-@router.get('/{id}', response_model=OrganizationApplicationResponse)
-async def get_application(
-    id: UUID,
+@router.get('/{organization_id}', response_model=OrganizationAdminApplicationResponse)
+async def get_organization(
+    organization_id: UUID,
     conn: asyncpg.Connection = Depends(get_db),
     _admin: str = Depends(get_admin_user),
 ):
@@ -194,8 +198,16 @@ async def get_application(
             detail='Failed to fetch application. Please try again later.',
         )
 
+@router.post('/{organization_id}/notes', response_model=InternalNoteResponse, status_code=status.HTTP_201_CREATED)
+async def add_internal_note(
+    organization_id: UUID,  
+    payload: InternalNoteCreate,
+    conn: asyncpg.Connection = Depends(get_db),
+    submitted_by: str = Depends(get_admin_user)
+):
+    return await organization_service.add_internal_note(conn=conn, organization_id=organization_id, submitted_by=UUID(submitted_by), content=payload.content)
 
-@router.patch('/{id}/decision', response_model=OrganizationApplicationResponse)
+@router.patch('/{organization_id}/decision', response_model=OrganizationApplicationResponse)
 async def decide_application(
     id: UUID,
     payload: OrganizationApplicationDecision,
