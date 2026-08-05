@@ -34,7 +34,6 @@ class OrganizationApplicationResponse(BaseModel):
     contact_phone: str | None
     status: Literal['pending', 'approved', 'rejected']
     application_answers: dict[str, str]
-    notes: list[dict]
     created_at: datetime
     updated_at: datetime
     approved_at: datetime | None
