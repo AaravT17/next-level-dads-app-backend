@@ -34,11 +34,30 @@ class OrganizationApplicationResponse(BaseModel):
     contact_phone: str | None
     status: Literal['pending', 'approved', 'rejected']
     application_answers: dict[str, str]
-    notes: list[dict]
     created_at: datetime
     updated_at: datetime
     approved_at: datetime | None
 
+class OrganizationAdminApplicationResponse(
+    OrganizationApplicationResponse
+):
+    notes: list[InternalNoteResponse]
+
+class OrganizationSummaryResponse(BaseModel):
+    id: UUID
+    name: str
+    status: Literal["pending", "approved", "rejected"]
+    created_at: datetime
+    updated_at: datetime
 
 class OrganizationApplicationDecision(BaseModel):
     status: Literal['approved', 'rejected']
+
+class InternalNoteCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
+
+class InternalNoteResponse(BaseModel):
+    id: UUID
+    submitted_by: UUID
+    content: str
+    submitted_at: datetime
