@@ -9,6 +9,10 @@ from app.models.organizations import (
     OrganizationApplicationCreate,
     OrganizationApplicationResponse,
     OrganizationApplicationDecision,
+    OrganizationAdminApplicationResponse,
+    InternalNoteCreate,
+    InternalNoteResponse,
+    OrganizationSummaryResponse
 )
 from app.services import organizations as organization_service
 
@@ -147,7 +151,7 @@ async def update_my_application(
 
 # ── Admin Review  ─────────────────────────────────────────────
 
-@router.get('/', response_model=list[OrganizationApplicationResponse])
+@router.get('/', response_model=list[OrganizationSummaryResponse])
 async def list_organizations(
     status_filter: str | None = Query(None, alias='status'),
     limit: int = Query(50, ge=1, le=200),
@@ -158,13 +162,22 @@ async def list_organizations(
     return await organization_service.list_organizations(conn=conn, status_filter=status_filter, limit=limit, offset=offset)
 
 
-@router.get('/{organization_id}', response_model=OrganizationApplicationResponse)
+@router.get('/{organization_id}', response_model=OrganizationAdminApplicationResponse)
 async def get_organization(
     organization_id: UUID,
     conn: asyncpg.Connection = Depends(get_db),
     _admin: str = Depends(get_admin_user)
 ):
     return await organization_service.get_organization(conn=conn, organization_id=organization_id)
+
+@router.post('/{organization_id}/notes', response_model=InternalNoteResponse, status_code=status.HTTP_201_CREATED)
+async def add_internal_note(
+    organization_id: UUID,  
+    payload: InternalNoteCreate,
+    conn: asyncpg.Connection = Depends(get_db),
+    submitted_by: str = Depends(get_admin_user)
+):
+    return await organization_service.add_internal_note(conn=conn, organization_id=organization_id, submitted_by=UUID(submitted_by), content=payload.content)
 
 @router.patch('/{organization_id}/decision', response_model=OrganizationApplicationResponse)
 async def decide_application(
