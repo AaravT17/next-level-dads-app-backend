@@ -6,24 +6,6 @@ from fastapi import status, HTTPException
 from app.models.organization_chats import (ChatResponse, SendMessageRequest, MessageResponse, LastMessageResponse, ChatListItemResponse)
 from app.utils.json_utils import parse_jsonb_value
 
-async def create_organization_chat(
-    conn: asyncpg.Connection,
-    organization_id: UUID,
-) -> None:
-    """
-    Create the single organization chat associated with a newly created organization.
-    This is intended to run during the organization application submission flow,
-    after the organization and organization representative records are created.
-    """
-
-    await conn.execute(
-        """
-        INSERT INTO organization_chats (organization_id)
-        VALUES ($1)
-        """,
-        organization_id,
-    )
-
 # ============================================================
 # Shared Admin + Partner Messaging
 # ============================================================
@@ -375,24 +357,44 @@ async def get_organization_chat(
 
     return ChatResponse(**dict(row))
 
+async def create_organization_chat(
+    conn: asyncpg.Connection,
+    organization_id: UUID,
+) -> None:
+    """
+    Create the single organization chat associated with a newly created organization.
+    This is intended to run during the organization application submission flow,
+    after the organization and organization representative records are created.
+    """
 
-#async def create_or_get_organization_chat()
-# Verify the organization exists.
-# Verify the requester is allowed to access it.
-# Find an existing chat by organization_id.
-# Return it if found.
-# Otherwise insert and return a new chat.
+    await conn.execute(
+        """
+        INSERT INTO organization_chats (organization_id)
+        VALUES ($1)
+        """,
+        organization_id,
+    )
 
-#async def create_organization_message()
+
+ # TODO 2: Finish creating chat access auth function.
+# async def verify_chat_access(
+
+# admin can access any chat
+# rep can only access their own org's chat  
+
+# TODO 3: Finish get message history service function.
+# async def get_messages()
+
+# TODO 4: Finish send message service function.
+# async def send_message()
 # Verify the chat exists.
 # Verify the current user can access that organization’s chat.
 # Validate reply_to_id, if supplied, belongs to the same chat.
 # Insert the message using the authenticated user as sender_id.
 # Return the inserted row.
 
-#async def verify_organization_chat_access()
-# admin can access any chat
-# rep can only access their own org's chat    
+# TODO 5: Finish admin list all chats service function.
+# async def list_chats()
 
 # TODO: Add reply-to support with validation.
 
