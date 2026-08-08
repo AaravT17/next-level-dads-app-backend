@@ -25,6 +25,9 @@ class OrganizationMessageResponse(BaseModel):
     edited_at: datetime | None
     is_deleted: bool
     created_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
 # ------------------------------------------------------------------
 # Organization messages
 # ------------------------------------------------------------------
