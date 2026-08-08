@@ -11,6 +11,7 @@ from app.config.rate_limits import CreateEventLimiter
 
 
 
+
 router = APIRouter(
     prefix='/api/events',
     tags=['events'],
@@ -131,7 +132,7 @@ async def unregister_from_event(
 
 @router.post(
     '/event-application',
-    response_model=EventCreateResponse,
+    response_model=EventResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create an event",
     description="""
@@ -149,23 +150,27 @@ async def unregister_from_event(
 async def create_event(
     event: EventCreate,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
-):
+    user_id=Depends(get_consented_user),
+    ):
     try:
         async with conn.transaction():
             user_id = UUID(user_id)
-            # print("user id: ", user_id)
             # Fetch Organization Id using the current users ID
             query = """
                 SELECT organization_id 
                 FROM organization_representatives
                 WHERE user_id = $1
             """
-            organization_id = await conn.fetchval(query, *[user_id])
-            # print("Organization id: ", organization_id)
+            organization_id = await conn.execute(query, *[user_id])
 
             if not organization_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User does not administer an organization')
+
+            db_event = {
+                **event.model_dump(mode='json'),
+                "hosted_by_org_id": organization_id,
+                "created_by": user_id,
+            }
 
             query = """
                 INSERT INTO events (name, description, type, starts_at, ends_at, location, latitude, longitude, hosted_by_org_id, contact_email, contact_phone, price_cad, created_by, created_at, app_status)
@@ -173,33 +178,17 @@ async def create_event(
                 RETURNING id
             """
 
-            # print("inserting into event table")
-            # Retrieve the ID of the new event row after insertion
-            res = await conn.fetchval(
+            res = await conn.fetchrow(
                 query,
-                event.name, 
-                event.description, 
-                event.type, 
-                event.starts_at, 
-                event.ends_at, 
-                event.location, 
-                event.latitude, 
-                event.longitude, 
-                organization_id, 
-                event.contact_email, 
-                event.contact_phone, 
-                event.price_cad, 
-                user_id
+                *[event.name, event.description, event.type, event.starts_at, event.ends_at, event.location, event.latitude, event.longitude, organization_id, event.contact_email, event.contact_phone, event.price_cad, user_id]
             )
-
-            # print ("insertion complete, id: ", res)
 
             if not res:
                 raise Exception('Failed to create event')
 
             # Return event id to user
-            event_id = res
-            return {'id': event_id}
+            event_id = res["id"]
+            return {'id': str(event_id)}
         
     except Exception as _:
         raise HTTPException(
