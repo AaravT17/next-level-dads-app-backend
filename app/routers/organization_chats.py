@@ -14,7 +14,6 @@ router = APIRouter(prefix="/api/organization-chats", tags=["Organization Messagi
 @router.get('/me', response_model=ChatResponse)
 async def get_my_chat(
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
 ):
     try:
         query = """
