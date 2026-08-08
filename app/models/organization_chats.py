@@ -71,7 +71,7 @@ class MessageResponse(BaseModel):
     created_at: datetime
 
 # TODO: Add reply-to request/response models after basic messaging works.
-# Database schema already includes organization_messages.reply_to_id.
+# Database already includes organization_messages.reply_to_id.
 
 # ------------------------------------------------------------------
 # Chat-list previews
