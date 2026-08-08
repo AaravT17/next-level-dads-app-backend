@@ -15,6 +15,8 @@ from app.models.organizations import (
     OrganizationSummaryResponse
 )
 from app.services import organizations as organization_service
+from app.services import organization_chats as organization_chats_service
+from app.utils.organizations import parse_jsonb_fields
 
 router = APIRouter(prefix='/api/organizations', tags=['organizations'])
 
@@ -66,7 +68,11 @@ async def submit_application(
                 res['id'],
                 UUID(user_id),
             )
-            return OrganizationApplicationResponse(**_parse_jsonb_fields(dict(res)))
+            await organization_chats_service.create_organization_chat(
+                conn=conn,
+                organization_id=res["id"],
+            )
+            return OrganizationApplicationResponse(**parse_jsonb_fields(dict(res)))
     except Exception as e:
         print(e)
         raise HTTPException(
