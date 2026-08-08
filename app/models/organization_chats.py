@@ -26,7 +26,6 @@ class OrganizationMessageResponse(BaseModel):
     edited_at: datetime | None
     is_deleted: bool
     created_at: datetime
-    created_at: datetime
     updated_at: datetime
 
 # ------------------------------------------------------------------
@@ -36,6 +35,7 @@ class OrganizationMessageResponse(BaseModel):
 class SendMessageRequest(BaseModel):
     """Request payload for sending a message in an organization chat."""
     content: str = Field(..., min_length=1, max_length=2000)
+    reply_to_id: UUID | None = None
 
     # Optional metadata for future event/resource message integration.
     subject: dict[str, Any] | None = None
