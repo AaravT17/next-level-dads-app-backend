@@ -72,6 +72,48 @@ class MessageResponse(BaseModel):
 
 # TODO: Add reply-to request/response models after basic messaging works.
 # Database schema already includes organization_messages.reply_to_id.
+# ------------------------------------------------------------------
+# Organization messages
+# ------------------------------------------------------------------
+
+class SendMessageRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=2000)
+    reply_to_id: UUID | None = None
+
+    # Optional metadata for future event/resource message integration.
+    subject: dict[str, Any] | None = None
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def validate_content(cls, content: str) -> str:
+        if not isinstance(content, str):
+            return content
+        stripped_content = content.strip()
+        if not stripped_content:
+            raise ValueError("Message content cannot be empty")
+
+        return stripped_content
+
+class MessageResponse(BaseModel):
+    id: UUID
+    chat_id: UUID
+
+    # Nullable because the database uses ON DELETE SET NULL.
+    sender_id: UUID | None = None
+
+    # These are not stored directly in organization_messages.
+    # They can be populated later through a joined query.
+    sender_name: str | None = None
+    sender_avatar_url: str | None = None
+
+    content: str
+    subject: dict[str, Any] | None = None
+    edited_at: datetime | None = None
+    is_deleted: bool
+    created_at: datetime
+
+# TODO: Add reply-to request/response models after basic messaging works.
+# Database already includes organization_messages.reply_to_id.
 
 # ------------------------------------------------------------------
 # Chat-list previews
@@ -94,6 +136,10 @@ class ChatListItemResponse(BaseModel):
 
     Organization details are populated by joining organization_chats
     with organizations.
+    Admin chat-list row.
+
+    organization_name is obtained by joining organization_chats
+    to organizations.
     """
 
     id: UUID
