@@ -7,35 +7,19 @@ from app.dependencies.db import get_db
 from app.models.organization_chats import (ChatResponse, SendMessageRequest, MessageResponse, LastMessageResponse, ChatListItemResponse)
 from app.services import organization_chats as organization_chats_service
 
-router = APIRouter(prefix="/api/organization-chats", tags=["Organization Messaging"])
+router = APIRouter(
+    prefix="/api/organization-chats", tags=["Organization Messaging"]
+)
 
-# ── Partner Messaging ─────────────────────────────────────────────
-
-@router.get('/me', response_model=ChatResponse)
-async def get_my_chat(
+@router.get('/', response_model=list[ChatListItemResponse])
+async def list_chats(
+    name: str | None = Query(None),
+    cursor_id: UUID | None = Query(None),
+    cursor_updated_at: datetime | None = Query(None),
+    _admin: str = Depends(get_admin_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    try:
-        query = """
-            SELECT oc.id, oc.organization_id, o.name AS organization_name, oc.created_at, oc.updated_at
-            FROM organization_chats oc
-            JOIN organizations o ON o.id = oc.organization_id
-            JOIN organization_representatives r ON r.organization_id = oc.organization_id
-            WHERE r.user_id = $1
-        """
-        res = await conn.fetchrow(query, UUID(user_id))
-        if not res:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='No chat found.')
-        return ChatResponse(**dict(res))
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to fetch chat. Please try again later.',
-        )
-
-# ── Shared Messaging ─────────────────────────────────────────────
+    return await organization_chats_service.list_chats(name=name, cursor_id=cursor_id, cursor_updated_at=cursor_updated_at, conn=conn)
 
 @router.post("/{chat_id}/messages", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
 async def send_message(
@@ -56,34 +40,3 @@ async def get_messages(
 ):
     return await organization_chats_service.get_messages(chat_id=chat_id, cursor_id=cursor_id, cursor_created_at=cursor_created_at, user_id=UUID(user_id), conn=conn)
 
-# ── Admin Messaging  ─────────────────────────────────────────────
-
-@router.get('/', response_model=list[ChatListItemResponse])
-async def list_chats(
-    search: str | None = Query(None),
-    cursor_id: UUID | None = Query(None),
-    cursor_updated_at: datetime | None = Query(None),
-    _admin: str = Depends(get_admin_user),
-    conn: asyncpg.Connection = Depends(get_db),
-):
-    return await organization_chats_service.list_chats(
-        search=search, cursor_id=cursor_id, cursor_updated_at=cursor_updated_at, conn=conn
-    )
-
-
-@router.get("/{chat_id}", response_model=ChatResponse)
-async def get_chat(
-    chat_id: UUID,
-    conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user),
-):
-    return await organization_chats_service.get_organization_chat(chat_id=chat_id, conn=conn)
-
-
-@router.get("/organizations/{organization_id}/chat", response_model=ChatResponse)
-async def get_chat_by_organization(
-    organization_id: UUID,
-    conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user),
-):
-    return await organization_chats_service.get_chat_by_organization(organization_id=organization_id, conn=conn)
