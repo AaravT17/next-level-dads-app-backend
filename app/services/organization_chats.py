@@ -442,6 +442,27 @@ async def get_chat_by_organization(
 
     return ChatResponse(**dict(row))
 
+
+ # TODO 2: Finish creating chat access auth function.
+# async def verify_chat_access(
+
+# admin can access any chat
+# rep can only access their own org's chat  
+
+# TODO 3: Finish get message history service function.
+# async def get_messages()
+
+# TODO 4: Finish send message service function.
+# async def send_message()
+# Verify the chat exists.
+# Verify the current user can access that organization’s chat.
+# Validate reply_to_id, if supplied, belongs to the same chat.
+# Insert the message using the authenticated user as sender_id.
+# Return the inserted row.
+
+# TODO 5: Finish admin list all chats service function.
+# async def list_chats()
+
 # TODO: Add reply-to support with validation.
 
 # TODO: Add message editing support.
