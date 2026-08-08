@@ -424,7 +424,6 @@ async def get_organization_chat(
 # mark is_deleted = true, and preserve the database record.
 
 # TODO: add a fallback of deleted user for null sender_id after an auth.user.id account is deleted
-# TODO: add a fallback of deleted user for null sender_id after an auth.user.id account is deleted
 
 # TODO: Validate that cursor_created_at and cursor_id are supplied together before applying pagination.
 
