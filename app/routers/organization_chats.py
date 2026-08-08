@@ -40,3 +40,12 @@ async def get_messages(
 ):
     return await organization_chats_service.get_messages(chat_id=chat_id, cursor_id=cursor_id, cursor_created_at=cursor_created_at, user_id=UUID(user_id), conn=conn)
 
+# ── Admin Messaging  ─────────────────────────────────────────────
+
+@router.get("/{chat_id}", response_model=ChatResponse)
+async def get_chat(
+    chat_id: UUID,
+    conn: asyncpg.Connection = Depends(get_db),
+    _admin: str = Depends(get_admin_user),
+):
+    return await organization_chats_service.get_organization_chat(chat_id=chat_id, conn=conn)
