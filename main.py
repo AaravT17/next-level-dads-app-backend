@@ -18,6 +18,7 @@ from app.routers.organizations import router as organizations_router
 from app.routers.organization_chats import router as organization_chats_router
 from app.routers import organization_chats
 from app.routers.partner_applications import router as partner_applications_router
+from app.routers import organization_chats
 from app.config.redis import init_redis, close_redis, get_redis
 from app.ws.pubsub import init_pubsub, close_pubsub
 from fastapi.middleware.cors import CORSMiddleware
