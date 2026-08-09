@@ -6,28 +6,6 @@ from fastapi import status, HTTPException
 from app.models.organization_chats import (ChatResponse, SendMessageRequest, MessageResponse, LastMessageResponse, ChatListItemResponse)
 from app.utils.json_utils import parse_jsonb_value
 
-async def create_organization_chat(
-    conn: asyncpg.Connection,
-    organization_id: UUID,
-) -> None:
-    """
-    Create the single organization chat associated with a newly created organization.
-    This is intended to run during the organization application submission flow,
-    after the organization and organization representative records are created.
-    """
-
-    await conn.execute(
-        """
-        INSERT INTO organization_chats (organization_id)
-        VALUES ($1)
-        """,
-        organization_id,
-    )
-
-# ============================================================
-# Partner Messaging
-# ============================================================
-
 # ============================================================
 # Shared Admin + Partner Messaging
 # ============================================================
@@ -369,37 +347,6 @@ async def list_chats(
 
     return chats
 
-async def get_organization_chat(
-    conn: asyncpg.Connection,
-    chat_id: UUID,
-) -> ChatResponse:
-    """
-    Retrieve the existing chat associated with an organization.
-    """
-    row = await conn.fetchrow(
-        """
-        SELECT
-            oc.id,
-            oc.organization_id,
-            o.name AS organization_name,
-            oc.created_at,
-            oc.updated_at
-        FROM organization_chats oc
-        JOIN organizations o
-            ON o.id = oc.organization_id
-        WHERE oc.id = $1
-        """,
-        chat_id,
-    )
-
-    if not row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail='Organization chat not found.',
-        )
-
-    return ChatResponse(**dict(row))
-
 async def get_chat_by_organization(
     conn: asyncpg.Connection,
     organization_id: UUID,
@@ -431,6 +378,54 @@ async def get_chat_by_organization(
 
     return ChatResponse(**dict(row))
 
+async def create_organization_chat(
+    conn: asyncpg.Connection,
+    organization_id: UUID,
+) -> None:
+    """
+    Create the single organization chat associated with a newly created organization.
+    This is intended to run during the organization application submission flow,
+    after the organization and organization representative records are created.
+    """
+
+    await conn.execute(
+        """
+        INSERT INTO organization_chats (organization_id)
+        VALUES ($1)
+        """,
+        organization_id,
+    )
+
+# ============================================================
+# Partner Messaging
+# ============================================================
+
+async def get_organization_chat(
+    conn: asyncpg.Connection,
+    organization_id: UUID,
+) -> ChatResponse:
+    """
+    Retrieve the existing chat associated with an organization.
+    """
+
+    row = await conn.fetchrow(
+        """
+        SELECT id, organization_id, created_at, updated_at
+        FROM organization_chats
+        WHERE organization_id = $1
+        """,
+        organization_id,
+    )
+
+    # if missing → error
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Organization chat not found.',
+        )
+
+    return ChatResponse(**dict(row))
+
 # TODO: Add reply-to support with validation.
 
 # TODO: Add message editing support.
@@ -441,8 +436,8 @@ async def get_chat_by_organization(
 # Validate that the authenticated sender owns the message,
 # mark is_deleted = true, and preserve the database record.
 
+# TODO: add a fallback of deleted user for null sender_id after an auth.user.id account is deleted
+
 # TODO: Validate that cursor_created_at and cursor_id are supplied together before applying pagination.
 
-# TODO: Add project-consistent database error handling
-# TODO: add a fallback of deleted user for null sender_id after an auth.user.id account is deleted
 # TODO: Add project-consistent database error handling
