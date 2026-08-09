@@ -7,7 +7,7 @@ from app.dependencies.auth import get_current_user
 from app.dependencies.db import get_db
 from app.models.organization_chats import OrganizationChatResponse, OrganizationMessageResponse
 
-router = APIRouter(prefix='/organization-chats', tags=['organization-chats'])
+router = APIRouter(prefix='/api/organization-chats', tags=['organization-chats'])
 
 
 def _parse_subject(row: dict) -> dict:
