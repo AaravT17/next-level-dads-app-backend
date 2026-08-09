@@ -15,6 +15,7 @@ from app.routers.admin import router as admin_router
 from app.routers.chats import router as chats_router
 from app.routers.ws import router as ws_router
 from app.routers.organizations import router as organizations_router
+from app.routers import organization_chats
 from app.config.redis import init_redis, close_redis, get_redis
 from app.ws.pubsub import init_pubsub, close_pubsub
 from fastapi.middleware.cors import CORSMiddleware
@@ -79,3 +80,4 @@ app.include_router(moderation_router)
 app.include_router(admin_router)
 app.include_router(chats_router)
 app.include_router(ws_router)
+app.include_router(organization_chats.router)
