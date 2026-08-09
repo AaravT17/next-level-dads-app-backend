@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS organizations (
     status               TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'approved', 'rejected')),
 
-    application_answers  JSONB NOT NULL DEFAULT '[]'::JSONB,
+    application_answers  JSONB NOT NULL DEFAULT '{}'::JSONB,
     notes                JSONB NOT NULL DEFAULT '[]'::JSONB,
 
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
