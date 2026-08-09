@@ -4,7 +4,7 @@ import asyncpg
 from app.models.organizations import OrganizationApplicationDecision, OrganizationAdminApplicationResponse, InternalNoteResponse, OrganizationSummaryResponse
 from uuid import UUID
 from fastapi import HTTPException, status
-from app.utils.organizations import parse_jsonb_fields, parse_jsonb_value
+from app.utils.json_utils import parse_jsonb_fields, parse_jsonb_value
 
 async def list_organizations(
     conn: asyncpg.Connection,
