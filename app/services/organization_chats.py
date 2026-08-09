@@ -43,6 +43,37 @@ async def create_organization_chat(
         organization_id,
     )
 
+async def get_organization_chat(
+    conn: asyncpg.Connection,
+    chat_id: UUID,
+) -> ChatResponse:
+    """
+    Retrieve an organization chat by chat ID.
+    """
+    row = await conn.fetchrow(
+        """
+        SELECT
+            oc.id,
+            oc.organization_id,
+            o.name AS organization_name,
+            oc.created_at,
+            oc.updated_at
+        FROM organization_chats oc
+        JOIN organizations o
+            ON o.id = oc.organization_id
+        WHERE oc.id = $1
+        """,
+        chat_id,
+    )
+
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Organization chat not found.',
+        )
+
+    return ChatResponse(**dict(row))
+
 # ============================================================
 # Shared Admin + Partner Messaging
 # ============================================================
@@ -78,7 +109,7 @@ async def verify_chat_access(
     admin = await conn.fetchval(
         """
         SELECT is_admin
-        FROM public.users
+        FROM users
         WHERE id = $1
         """,
         user_id,
@@ -148,7 +179,6 @@ async def get_messages(
     """
     Return messages from an organization chat after verifying that
     the authenticated user has access to the chat.
-    Supports cursor-based pagination using the message creation time and ID.
     """
 
     await verify_chat_access(
@@ -219,9 +249,6 @@ async def send_message(
 ) -> MessageResponse:
     """
     Send a message in an organization chat after verifying access.
-
-    Stores optional subject metadata, updates the chat's activity timestamp,
-    and returns the saved message with the sender's display name.
     """
 
     await verify_chat_access(
@@ -274,7 +301,7 @@ async def send_message(
 # ============================================================
 async def list_chats(
     conn: asyncpg.Connection,
-    search: str | None = None,
+    name: str | None = None,
     cursor_id: UUID | None = None,
     cursor_updated_at: datetime | None = None,
 ) -> list[ChatListItemResponse]:
@@ -284,7 +311,8 @@ async def list_chats(
     of the most recent message, if one exists.
     """
 
-    query = """
+    rows = await conn.fetch(
+        """
         SELECT
             oc.id,
             oc.organization_id,
@@ -298,10 +326,8 @@ async def list_chats(
             lm.created_at AS last_message_created_at,
             lm.is_deleted AS last_message_is_deleted
         FROM organization_chats oc
-        
         JOIN organizations o
             ON o.id = oc.organization_id
-
         LEFT JOIN LATERAL (
             SELECT
                 m.id,
@@ -312,24 +338,16 @@ async def list_chats(
                 m.created_at,
                 m.is_deleted
             FROM organization_messages m
-
             LEFT JOIN public.users u
                 ON u.id = m.sender_id
-
             LEFT JOIN organizations sender_org
                 ON sender_org.admin_user_id = m.sender_id
-
             WHERE m.chat_id = oc.id
             ORDER BY m.created_at DESC, m.id DESC
             LIMIT 1
         ) lm ON TRUE
-
         WHERE
-            (
-                $1::text IS NULL
-                OR o.name ILIKE '%' || $1 || '%'
-                OR o.contact_name ILIKE '%' || $1 || '%'
-            )
+            ($1::text IS NULL OR o.name ILIKE '%' || $1 || '%')
             AND (
                 $2::timestamptz IS NULL
                 OR oc.updated_at < $2
@@ -337,11 +355,8 @@ async def list_chats(
             )
         ORDER BY oc.updated_at DESC, oc.id DESC
         LIMIT 50
-    """
-
-    rows = await conn.fetch(
-        query,
-        search,
+        """,
+        name,
         cursor_updated_at,
         cursor_id,
     )
@@ -379,90 +394,6 @@ async def list_chats(
 
     return chats
 
-async def get_organization_chat(
-    conn: asyncpg.Connection,
-    chat_id: UUID,
-) -> ChatResponse:
-    """
-    Retrieve an organization chat by chat ID.
-    """
-    row = await conn.fetchrow(
-        """
-        SELECT
-            oc.id,
-            oc.organization_id,
-            o.name AS organization_name,
-            oc.created_at,
-            oc.updated_at
-        FROM organization_chats oc
-        JOIN organizations o
-            ON o.id = oc.organization_id
-        WHERE oc.id = $1
-        """,
-        chat_id,
-    )
-
-    if not row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail='Organization chat not found.',
-        )
-
-    return ChatResponse(**dict(row))
-
-async def get_chat_by_organization(
-    conn: asyncpg.Connection,
-    organization_id: UUID,
-) -> ChatResponse:
-    """
-    Retrieve an organization's chat by organization ID. Currently used by admins
-    to access a chat from the organization review flow.
-    """
-    row = await conn.fetchrow(
-        """
-       SELECT
-            oc.id,
-            oc.organization_id,
-            o.name AS organization_name,
-            oc.created_at,
-            oc.updated_at
-        FROM organization_chats oc
-        JOIN organizations o
-            ON o.id = oc.organization_id
-        WHERE oc.organization_id = $1
-        """,
-        organization_id,
-    )
-
-    if not row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail='Organization chat not found.',
-        )
-
-    return ChatResponse(**dict(row))
-
-
- # TODO 2: Finish creating chat access auth function.
-# async def verify_chat_access(
-
-# admin can access any chat
-# rep can only access their own org's chat  
-
-# TODO 3: Finish get message history service function.
-# async def get_messages()
-
-# TODO 4: Finish send message service function.
-# async def send_message()
-# Verify the chat exists.
-# Verify the current user can access that organization’s chat.
-# Validate reply_to_id, if supplied, belongs to the same chat.
-# Insert the message using the authenticated user as sender_id.
-# Return the inserted row.
-
-# TODO 5: Finish admin list all chats service function.
-# async def list_chats()
-
 # TODO: Add reply-to support with validation.
 
 # TODO: Add message editing support.
@@ -473,6 +404,8 @@ async def get_chat_by_organization(
 # Validate that the authenticated sender owns the message,
 # mark is_deleted = true, and preserve the database record.
 
-# TODO: Add deleted user fallback when sendder_id becomes NULL after the related auth user is deleted.
+# TODO: add a fallback of deleted user for null sender_id after an auth.user.id account is deleted
 
-# TODO: Validate that cursor_created_at and cursor_id are supplied together.
+# TODO: Validate that cursor_created_at and cursor_id are supplied together before applying pagination.
+
+# TODO: Add project-consistent database error handling
