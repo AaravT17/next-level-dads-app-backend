@@ -7,6 +7,170 @@ from app.models.organization_chats import (ChatResponse, SendMessageRequest, Mes
 from app.utils.json_utils import parse_jsonb_value
 
 # ============================================================
+# Admin Messaging
+# ============================================================
+async def list_chats(
+    conn: asyncpg.Connection,
+    name: str | None = None,
+    cursor_id: UUID | None = None,
+    cursor_updated_at: datetime | None = None,
+) -> list[ChatListItemResponse]:
+    """
+    Return organization chats for the admin messaging list.
+    Each list item includes organization information and a preview
+    of the most recent message, if one exists.
+    """
+
+    rows = await conn.fetch(
+        """
+        SELECT
+            oc.id,
+            oc.organization_id,
+            o.name AS organization_name,
+            oc.updated_at,
+            lm.id AS last_message_id,
+            lm.content AS last_message_content,
+            lm.sender_id AS last_message_sender_id,
+            lm.sender_name AS last_message_sender_name,
+            lm.subject AS last_message_subject,
+            lm.created_at AS last_message_created_at,
+            lm.is_deleted AS last_message_is_deleted
+        FROM organization_chats oc
+        JOIN organizations o
+            ON o.id = oc.organization_id
+        LEFT JOIN LATERAL (
+            SELECT
+                m.id,
+                m.content,
+                m.sender_id,
+                COALESCE(u.name, sender_org.contact_name) AS sender_name,
+                m.subject,
+                m.created_at,
+                m.is_deleted
+            FROM organization_messages m
+            LEFT JOIN public.users u
+                ON u.id = m.sender_id
+            LEFT JOIN organizations sender_org
+                ON sender_org.admin_user_id = m.sender_id
+            WHERE m.chat_id = oc.id
+            ORDER BY m.created_at DESC, m.id DESC
+            LIMIT 1
+        ) lm ON TRUE
+        WHERE
+            ($1::text IS NULL OR o.name ILIKE '%' || $1 || '%')
+            AND (
+                $2::timestamptz IS NULL
+                OR oc.updated_at < $2
+                OR (oc.updated_at = $2 AND oc.id < $3)
+            )
+        ORDER BY oc.updated_at DESC, oc.id DESC
+        LIMIT 50
+        """,
+        name,
+        cursor_updated_at,
+        cursor_id,
+    )
+
+    chats: list[ChatListItemResponse] = []
+
+    for row in rows:
+        last_message = None
+
+        if row["last_message_id"] is not None:
+            last_message_subject = parse_jsonb_value(
+                row["last_message_subject"],
+                None,
+            ) 
+
+            last_message = LastMessageResponse(
+                id=row["last_message_id"],
+                content=row["last_message_content"],
+                sender_id=row["last_message_sender_id"],
+                sender_name=row['last_message_sender_name'],
+                subject=last_message_subject,
+                created_at=row["last_message_created_at"],
+                is_deleted=row["last_message_is_deleted"],
+            )
+
+        chats.append(
+            ChatListItemResponse(
+                id=row["id"],
+                organization_id=row["organization_id"],
+                organization_name=row["organization_name"],
+                updated_at=row["updated_at"],
+                last_message=last_message,
+            )
+        )
+
+    return chats
+
+#async def create_or_get_organization_chat()
+# Verify the organization exists.
+# Verify the requester is allowed to access it.
+# Find an existing chat by organization_id.
+# Return it if found.
+# Otherwise insert and return a new chat.
+
+#async def create_organization_message()
+# Verify the chat exists.
+# Verify the current user can access that organization’s chat.
+# Validate reply_to_id, if supplied, belongs to the same chat.
+# Insert the message using the authenticated user as sender_id.
+# Return the inserted row.
+
+#async def verify_organization_chat_access()
+# admin can access any chat
+# rep can only access their own org's chat    
+
+async def create_organization_chat(
+    conn: asyncpg.Connection,
+    organization_id: UUID,
+) -> None:
+    """
+    Create the single organization chat associated with a newly created organization.
+    This is intended to run during the organization application submission flow,
+    after the organization and organization representative records are created.
+    """
+
+    await conn.execute(
+        """
+        INSERT INTO organization_chats (organization_id)
+        VALUES ($1)
+        """,
+        organization_id,
+    )
+
+# ============================================================
+# Partner Messaging
+# ============================================================
+
+async def get_organization_chat(
+    conn: asyncpg.Connection,
+    organization_id: UUID,
+) -> ChatResponse:
+    """
+    Retrieve the existing chat associated with an organization.
+    """
+
+    row = await conn.fetchrow(
+        """
+        SELECT id, organization_id, created_at, updated_at
+        FROM organization_chats
+        WHERE organization_id = $1
+        """,
+        organization_id,
+    )
+
+    # if missing → error
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Organization chat not found.',
+        )
+
+    return ChatResponse(**dict(row))
+
+# ============================================================
 # Shared Admin + Partner Messaging
 # ============================================================
 
@@ -228,185 +392,6 @@ async def send_message(
         sender_avatar_url=None,
     )
 
-# ============================================================
-# Admin Messaging
-# ============================================================
-async def list_chats(
-    conn: asyncpg.Connection,
-    name: str | None = None,
-    cursor_id: UUID | None = None,
-    cursor_updated_at: datetime | None = None,
-) -> list[ChatListItemResponse]:
-    """
-    Return organization chats for the admin messaging list.
-    Each list item includes organization information and a preview
-    of the most recent message, if one exists.
-    """
-
-    rows = await conn.fetch(
-        """
-        SELECT
-            oc.id,
-            oc.organization_id,
-            o.name AS organization_name,
-            oc.updated_at,
-            lm.id AS last_message_id,
-            lm.content AS last_message_content,
-            lm.sender_id AS last_message_sender_id,
-            lm.sender_name AS last_message_sender_name,
-            lm.subject AS last_message_subject,
-            lm.created_at AS last_message_created_at,
-            lm.is_deleted AS last_message_is_deleted
-        FROM organization_chats oc
-        JOIN organizations o
-            ON o.id = oc.organization_id
-        LEFT JOIN LATERAL (
-            SELECT
-                m.id,
-                m.content,
-                m.sender_id,
-                COALESCE(u.name, sender_org.contact_name) AS sender_name,
-                m.subject,
-                m.created_at,
-                m.is_deleted
-            FROM organization_messages m
-            LEFT JOIN public.users u
-                ON u.id = m.sender_id
-            LEFT JOIN organizations sender_org
-                ON sender_org.admin_user_id = m.sender_id
-            WHERE m.chat_id = oc.id
-            ORDER BY m.created_at DESC, m.id DESC
-            LIMIT 1
-        ) lm ON TRUE
-        WHERE
-            ($1::text IS NULL OR o.name ILIKE '%' || $1 || '%')
-            AND (
-                $2::timestamptz IS NULL
-                OR oc.updated_at < $2
-                OR (oc.updated_at = $2 AND oc.id < $3)
-            )
-        ORDER BY oc.updated_at DESC, oc.id DESC
-        LIMIT 50
-        """,
-        name,
-        cursor_updated_at,
-        cursor_id,
-    )
-
-    chats: list[ChatListItemResponse] = []
-
-    for row in rows:
-        last_message = None
-
-        if row["last_message_id"] is not None:
-            last_message_subject = parse_jsonb_value(
-                row["last_message_subject"],
-                None,
-            ) 
-
-            last_message = LastMessageResponse(
-                id=row["last_message_id"],
-                content=row["last_message_content"],
-                sender_id=row["last_message_sender_id"],
-                sender_name=row['last_message_sender_name'],
-                subject=last_message_subject,
-                created_at=row["last_message_created_at"],
-                is_deleted=row["last_message_is_deleted"],
-            )
-
-        chats.append(
-            ChatListItemResponse(
-                id=row["id"],
-                organization_id=row["organization_id"],
-                organization_name=row["organization_name"],
-                updated_at=row["updated_at"],
-                last_message=last_message,
-            )
-        )
-
-    return chats
-
-#async def create_or_get_organization_chat()
-# Verify the organization exists.
-# Verify the requester is allowed to access it.
-# Find an existing chat by organization_id.
-# Return it if found.
-# Otherwise insert and return a new chat.
-
-#async def create_organization_message()
-# Verify the chat exists.
-# Verify the current user can access that organization’s chat.
-# Validate reply_to_id, if supplied, belongs to the same chat.
-# Insert the message using the authenticated user as sender_id.
-# Return the inserted row.
-
-#async def verify_organization_chat_access()
-# admin can access any chat
-# rep can only access their own org's chat    
-
-async def create_organization_chat(
-    conn: asyncpg.Connection,
-    organization_id: UUID,
-) -> None:
-    """
-    Create the single organization chat associated with a newly created organization.
-    This is intended to run during the organization application submission flow,
-    after the organization and organization representative records are created.
-    """
-
-    await conn.execute(
-        """
-        INSERT INTO organization_chats (organization_id)
-        VALUES ($1)
-        """,
-        organization_id,
-    )
-
-async def get_organization_chat(
-    conn: asyncpg.Connection,
-    organization_id: UUID,
-) -> ChatResponse:
-    """
-    Retrieve the existing chat associated with an organization.
-    """
-
-    row = await conn.fetchrow(
-        """
-        SELECT id, organization_id, created_at, updated_at
-        FROM organization_chats
-        WHERE organization_id = $1
-        """,
-        organization_id,
-    )
-
-    # if missing → error
-    if not row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail='Organization chat not found.',
-        )
-
-    return ChatResponse(**dict(row))
-
- # TODO 2: Finish creating chat access auth function.
-# async def verify_chat_access(
-
-# admin can access any chat
-# rep can only access their own org's chat  
-
-# TODO 3: Finish get message history service function.
-# async def get_messages()
-
-# TODO 4: Finish send message service function.
-# async def send_message()
-# Verify the chat exists.
-# Verify the current user can access that organization’s chat.
-# Validate reply_to_id, if supplied, belongs to the same chat.
-# Insert the message using the authenticated user as sender_id.
-# Return the inserted row.
-
-# TODO 5: Finish admin list all chats service function.
-# async def list_chats()
 
 # TODO: Add reply-to support with validation.
 
