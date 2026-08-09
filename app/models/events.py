@@ -82,3 +82,6 @@ class EventCreate(BaseModel):
     contact_email: str | None = Field(max_length=EVENT_HOSTED_BY_CONTACT_EMAIL_MAX_LENGTH)
     contact_phone: str | None = Field(max_length=EVENT_HOSTED_BY_CONTACT_PHONE_MAX_LENGTH)
     price_cad: Decimal
+
+class EventCreateResponse(BaseModel):
+    id: UUID

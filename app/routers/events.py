@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from app.dependencies.auth import get_consented_user
-from app.models.events import EventResponse, EventCreate
+from app.dependencies.auth import get_consented_user, get_current_user
+from app.models.events import EventResponse, EventCreate, EventCreateResponse
 from app.dependencies.db import get_db
 from typing import Literal
 import asyncpg
@@ -130,33 +130,29 @@ async def unregister_from_event(
 
 @router.post(
     '/event-application',
-    response_model=EventResponse,
+    response_model=EventCreateResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_event(
     event: EventCreate, 
     conn: asyncpg.Connection = Depends(get_db),
-    user_id=Depends(get_consented_user),
+    user_id=Depends(get_current_user),
     ):
     try:
         async with conn.transaction():
             user_id = UUID(user_id)
+            # print("user id: ", user_id)
             # Fetch Organization Id using the current users ID
             query = """
                 SELECT organization_id 
                 FROM organization_representatives
                 WHERE user_id = $1
             """
-            organization_id = await conn.execute(query, *[user_id])
+            organization_id = await conn.fetchval(query, *[user_id])
+            # print("Organization id: ", organization_id)
 
             if not organization_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User does not administer an organization')
-
-            db_event = {
-                **event.model_dump(mode='json'),
-                "hosted_by_org_id": organization_id,
-                "created_by": user_id,
-            }
 
             query = """
                 INSERT INTO events (name, description, type, starts_at, ends_at, location, latitude, longitude, hosted_by_org_id, contact_email, contact_phone, price_cad, created_by, created_at, app_status)
@@ -164,20 +160,36 @@ async def create_event(
                 RETURNING id
             """
 
-            res = await conn.fetchrow(
+            # print("inserting into event table")
+            # Retrieve the ID of the new event row after insertion
+            res = await conn.fetchval(
                 query,
-                *[event.name, event.description, event.type, event.starts_at, event.ends_at, event.location, event.latitude, event.longitude, organization_id, event.contact_email, event.contact_phone, event.price_cad, user_id]
+                event.name, 
+                event.description, 
+                event.type, 
+                event.starts_at, 
+                event.ends_at, 
+                event.location, 
+                event.latitude, 
+                event.longitude, 
+                organization_id, 
+                event.contact_email, 
+                event.contact_phone, 
+                event.price_cad, 
+                user_id
             )
+
+            # print ("insertion complete, id: ", res)
 
             if not res:
                 raise Exception('Failed to create event')
 
             # Return event id to user
-            event_id = res["id"]
-            return {'id': str(event_id)}
+            event_id = res
+            return {'id': event_id}
         
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to create community. Please try again later.',
+            detail='Failed to create event. Please try again later.',
         )
