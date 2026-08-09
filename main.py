@@ -20,6 +20,7 @@ from app.routers import organization_chats
 from app.routers.partner_applications import router as partner_applications_router
 from app.routers import organization_chats
 from app.routers.partner_applications import router as partner_applications_router
+from app.routers import organization_chats
 from app.config.redis import init_redis, close_redis, get_redis
 from app.routers.organizations_events import router as organizations_events_router
 from app.config.redis import init_redis, close_redis
@@ -90,3 +91,4 @@ app.include_router(chats_router)
 app.include_router(ws_router)
 app.include_router(organization_chats.router)
 app.include_router(organizations_events_router)
+app.include_router(organization_chats.router)
