@@ -17,7 +17,8 @@ from app.models.organizations import (
     OrganizationSummaryResponse
 )
 from app.services import organizations as organization_service
-from app.utils.organizations import parse_jsonb_fields
+from app.services import organization_chats as organization_chats_service
+from app.utils.json_utils import parse_jsonb_fields
 
 router = APIRouter(prefix='/api/organizations', tags=['organizations'])
 
