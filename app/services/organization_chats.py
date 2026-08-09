@@ -409,4 +409,3 @@ async def get_organization_chat(
 # TODO: Validate that cursor_created_at and cursor_id are supplied together before applying pagination.
 
 # TODO: Add project-consistent database error handling
-# TODO: add a fallback of deleted user for null sender_id after an auth.user.id account is deleted
