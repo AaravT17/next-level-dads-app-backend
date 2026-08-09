@@ -5,7 +5,6 @@ from app.models.organizations import OrganizationApplicationDecision, Organizati
 from uuid import UUID
 from fastapi import HTTPException, status
 from app.utils.json_utils import parse_jsonb_fields, parse_jsonb_value
-from app.utils.organizations import parse_jsonb_fields, parse_jsonb_value
 
 async def list_organizations(
     conn: asyncpg.Connection,
