@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 class ChatResponse(BaseModel):
     id: UUID
     organization_id: UUID
+    organization_name: str
     created_at: datetime
     updated_at: datetime
 
