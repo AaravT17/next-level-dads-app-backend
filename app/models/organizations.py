@@ -38,6 +38,15 @@ class OrganizationApplicationResponse(BaseModel):
     updated_at: datetime
     approved_at: datetime | None
 
+class InternalNoteCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
+
+class InternalNoteResponse(BaseModel):
+    id: UUID
+    submitted_by: UUID
+    content: str
+    submitted_at: datetime
+
 class OrganizationAdminApplicationResponse(
     OrganizationApplicationResponse
 ):
