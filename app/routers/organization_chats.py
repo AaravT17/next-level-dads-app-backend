@@ -1,36 +1,37 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-import asyncpg
-import json
 from uuid import UUID
-
-from app.dependencies.auth import get_current_user
+from datetime import datetime
+import asyncpg
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from app.dependencies.auth import get_current_user, get_admin_user
 from app.dependencies.db import get_db
-from app.models.organization_chats import OrganizationChatResponse, OrganizationMessageResponse
+from app.models.organization_chats import (
+    ChatResponse,
+    SendMessageRequest,
+    MessageResponse,
+    ChatListItemResponse,
+)
+from app.services import organization_chats as organization_chats_service
 
-router = APIRouter(prefix='/api/organization-chats', tags=['organization-chats'])
+router = APIRouter(prefix="/api/organization-chats", tags=["Organization Messaging"])
 
 
-def _parse_subject(row: dict) -> dict:
-    row['subject'] = json.loads(row['subject']) if row['subject'] else None
-    return row
-
-
-@router.get('/me', response_model=OrganizationChatResponse)
+@router.get('/me', response_model=ChatResponse)
 async def get_my_chat(
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
     try:
         query = """
-            SELECT c.*
-            FROM organization_chats c
-            JOIN organization_representatives r ON r.organization_id = c.organization_id
+            SELECT oc.id, oc.organization_id, o.name AS organization_name, oc.created_at, oc.updated_at
+            FROM organization_chats oc
+            JOIN organizations o ON o.id = oc.organization_id
+            JOIN organization_representatives r ON r.organization_id = oc.organization_id
             WHERE r.user_id = $1
         """
         res = await conn.fetchrow(query, UUID(user_id))
         if not res:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='No chat found.')
-        return OrganizationChatResponse(**dict(res))
+        return ChatResponse(**dict(res))
     except HTTPException:
         raise
     except Exception:
@@ -40,39 +41,48 @@ async def get_my_chat(
         )
 
 
-@router.get('/{chat_id}/messages', response_model=list[OrganizationMessageResponse])
-async def get_chat_messages(
+@router.post("/{chat_id}/messages", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
+async def send_message(
+    chat_id: UUID,
+    body: SendMessageRequest,
+    user_id: str = Depends(get_current_user),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    return await organization_chats_service.send_message(chat_id=chat_id, body=body, user_id=UUID(user_id), conn=conn)
+
+
+@router.get('/{chat_id}/messages', response_model=list[MessageResponse])
+async def get_messages(
+    chat_id: UUID,
+    cursor_id: UUID | None = Query(None),
+    cursor_created_at: datetime | None = Query(None),
+    user_id: str = Depends(get_current_user),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    return await organization_chats_service.get_messages(
+        chat_id=chat_id, cursor_id=cursor_id, cursor_created_at=cursor_created_at, user_id=UUID(user_id), conn=conn
+    )
+
+
+# ── Admin Messaging ─────────────────────────────────────────────
+
+@router.get('/', response_model=list[ChatListItemResponse])
+async def list_chats(
+    name: str | None = Query(None),
+    cursor_id: UUID | None = Query(None),
+    cursor_updated_at: datetime | None = Query(None),
+    _admin: str = Depends(get_admin_user),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    return await organization_chats_service.list_chats(
+        name=name, cursor_id=cursor_id, cursor_updated_at=cursor_updated_at, conn=conn
+    )
+
+
+@router.get("/{chat_id}", response_model=ChatResponse)
+async def get_chat(
     chat_id: UUID,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    _admin: str = Depends(get_admin_user),
 ):
-    try:
-        access_query = """
-            SELECT
-                EXISTS (
-                    SELECT 1
-                    FROM organization_chats c
-                    JOIN organization_representatives r ON r.organization_id = c.organization_id
-                    WHERE c.id = $1 AND r.user_id = $2
-                ) AS is_own_chat,
-                COALESCE((SELECT is_admin FROM public.users WHERE id = $2), false) AS is_admin
-        """
-        access = await conn.fetchrow(access_query, chat_id, UUID(user_id))
-        if not access or not (access['is_own_chat'] or access['is_admin']):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Access denied.')
-
-        query = """
-            SELECT *
-            FROM organization_messages
-            WHERE chat_id = $1
-            ORDER BY created_at ASC
-        """
-        rows = await conn.fetch(query, chat_id)
-        return [OrganizationMessageResponse(**_parse_subject(dict(r))) for r in rows]
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to fetch messages. Please try again later.',
-        )
+    return await organization_chats_service.get_organization_chat(chat_id=chat_id, conn=conn)

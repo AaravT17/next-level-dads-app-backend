@@ -101,7 +101,7 @@ async def set_oauth_session(credentials: OAuthSessionRequest, response: Response
 async def logout_user(response: Response, access_token: str = Depends(get_current_access_token)):
     supabase = get_supabase()
     try:
-        await supabase.auth.admin.sign_out(access_token)
+        await supabase.auth.admin.sign_out(access_token, "local")
     except Exception as _:
         pass  # we want to clear the cookie even if the sign out fails for some reason
     clear_refresh_cookie(response)
