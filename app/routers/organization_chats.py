@@ -14,6 +14,7 @@ from app.services import organization_chats as organization_chats_service
 
 router = APIRouter(prefix="/api/organization-chats", tags=["Organization Messaging"])
 
+# ── Partner Messaging ─────────────────────────────────────────────
 
 @router.get('/me', response_model=ChatResponse)
 async def get_my_chat(
@@ -40,6 +41,7 @@ async def get_my_chat(
             detail='Failed to fetch chat. Please try again later.',
         )
 
+# ── Shared Messaging ─────────────────────────────────────────────
 
 @router.post("/{chat_id}/messages", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
 async def send_message(
@@ -86,6 +88,7 @@ async def get_chat(
     _admin: str = Depends(get_admin_user),
 ):
     return await organization_chats_service.get_organization_chat(chat_id=chat_id, conn=conn)
+
 
 @router.get("/organizations/{organization_id}/chat", response_model=ChatResponse)
 async def get_chat_by_organization(

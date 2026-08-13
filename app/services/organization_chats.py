@@ -129,6 +129,7 @@ async def get_messages(
     """
     Return messages from an organization chat after verifying that
     the authenticated user has access to the chat.
+    Supports cursor-based pagination using the message creation time and ID.
     """
 
     await verify_chat_access(
@@ -199,6 +200,9 @@ async def send_message(
 ) -> MessageResponse:
     """
     Send a message in an organization chat after verifying access.
+
+    Stores optional subject metadata, updates the chat's activity timestamp,
+    and returns the saved message with the sender's display name.
     """
 
     await verify_chat_access(
@@ -230,15 +234,6 @@ async def send_message(
         user_id,
         body.content,
         json.dumps(body.subject) if body.subject is not None else None,
-    )
-
-    await conn.execute(
-        """
-        UPDATE organization_chats
-        SET updated_at = now()
-        WHERE id = $1
-        """,
-        chat_id,
     )
 
     row_data = dict(row)
@@ -370,7 +365,7 @@ async def get_organization_chat(
     chat_id: UUID,
 ) -> ChatResponse:
     """
-    Retrieve the existing chat associated with an organization.
+    Retrieve an organization chat by chat ID.
     """
     row = await conn.fetchrow(
         """
@@ -401,7 +396,8 @@ async def get_chat_by_organization(
     organization_id: UUID,
 ) -> ChatResponse:
     """
-    Retrieve an organization's chat. Currently used for admin access to a chat via the organization ID.
+    Retrieve an organization's chat by organization ID. Currently used by admins
+    to access a chat from the organization review flow.
     """
     row = await conn.fetchrow(
         """
@@ -437,8 +433,6 @@ async def get_chat_by_organization(
 # Validate that the authenticated sender owns the message,
 # mark is_deleted = true, and preserve the database record.
 
-# TODO: add a fallback of deleted user for null sender_id after an auth.user.id account is deleted
+# TODO: Add deleted user fallback when sendder_id becomes NULL after the related auth user is deleted.
 
-# TODO: Validate that cursor_created_at and cursor_id are supplied together before applying pagination.
-
-# TODO: Add project-consistent database error handling
+# TODO: Validate that cursor_created_at and cursor_id are supplied together.

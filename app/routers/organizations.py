@@ -191,7 +191,7 @@ async def list_organization_action_items(
     conn: asyncpg.Connection = Depends(get_db),
     _admin: str = Depends(get_admin_user),
 ):
-    return await organization_service.list_action_items(conn=conn,limit=limit)
+    return await organization_service.list_organization_action_items(conn=conn,limit=limit)
 
 @router.post('/{organization_id}/notes', response_model=InternalNoteResponse, status_code=status.HTTP_201_CREATED)
 async def add_internal_note(
@@ -202,7 +202,7 @@ async def add_internal_note(
 ):
     return await organization_service.add_internal_note(conn=conn, organization_id=organization_id, submitted_by=UUID(submitted_by), content=payload.content)
 
-@router.patch('/{organization_id}/decision', response_model=OrganizationApplicationResponse)
+@router.patch('/{organization_id}/decision', response_model=OrganizationAdminApplicationResponse)
 async def decide_application(
     organization_id: UUID,
     payload: OrganizationApplicationDecision,
