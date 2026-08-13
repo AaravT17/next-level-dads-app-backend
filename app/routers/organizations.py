@@ -6,6 +6,8 @@ from uuid import UUID
 from app.dependencies.auth import get_current_user, get_admin_user
 from app.dependencies.db import get_db
 from app.models.organizations import (
+    ActivePartnerResponse,
+    ApplicationRowResponse,
     OrganizationApplicationCreate,
     OrganizationApplicationResponse,
     OrganizationApplicationDecision,
@@ -13,8 +15,8 @@ from app.models.organizations import (
     InternalNoteCreate,
     InternalNoteResponse,
     ActionItemResponse,
-    ApplicationsRowResponse,
-    ActivePartnersResponse
+    ApplicationRowResponse,
+    ActivePartnerResponse
 )
 from app.services import organizations as organization_service
 from app.services import organization_chats as organization_chats_service
@@ -153,24 +155,26 @@ async def update_my_application(
 
 # ── Admin Review  ─────────────────────────────────────────────
 
-@router.get('/applications', response_model=list[ApplicationsRowResponse])
+@router.get('/applications', response_model=list[ApplicationRowResponse])
 async def list_applications(
     status_filter: Literal["pending", "rejected"] | None = Query(None, alias='status'),
+    search: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     conn: asyncpg.Connection = Depends(get_db),
     _admin: str = Depends(get_admin_user)
 ):
-    return await organization_service.list_applications(conn=conn, status_filter=status_filter, limit=limit, offset=offset)
+    return await organization_service.list_applications(conn=conn, status_filter=status_filter, search=search, limit=limit, offset=offset)
 
-@router.get('/active', response_model=list[ActivePartnersResponse])
+@router.get('/active', response_model=list[ActivePartnerResponse])
 async def list_active_partners(
+    search: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     conn: asyncpg.Connection = Depends(get_db),
     _admin: str = Depends(get_admin_user)
 ):
-    return await organization_service.list_active_partners(conn=conn, limit=limit, offset=offset)
+    return await organization_service.list_active_partners(conn=conn, search=search, limit=limit, offset=offset)
 
 @router.get('/{organization_id}', response_model=OrganizationAdminApplicationResponse)
 async def get_organization(

@@ -34,7 +34,6 @@ class OrganizationMessageResponse(BaseModel):
 
 class SendMessageRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=2000)
-    reply_to_id: UUID | None = None
 
     # Optional metadata for future event/resource message integration.
     subject: dict[str, Any] | None = None
@@ -69,7 +68,7 @@ class MessageResponse(BaseModel):
     created_at: datetime
 
 # TODO: Add reply-to request/response models after basic messaging works.
-# Database already includes organization_messages.reply_to_id.
+# Database schema already includes organization_messages.reply_to_id.
 
 # ------------------------------------------------------------------
 # Chat-list previews

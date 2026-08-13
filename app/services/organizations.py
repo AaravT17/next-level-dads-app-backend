@@ -6,8 +6,8 @@ from app.models.organizations import (
     OrganizationAdminApplicationResponse, 
     InternalNoteResponse, 
     ActionItemResponse,
-    ApplicationsRowResponse, 
-    ActivePartnersResponse)
+    ApplicationRowResponse, 
+    ActivePartnerResponse)
 from uuid import UUID
 from fastapi import HTTPException, status
 from app.utils.json_utils import parse_jsonb_fields, parse_jsonb_value
@@ -17,7 +17,8 @@ async def list_applications(
     status_filter: Literal["pending", "rejected"]  | None,
     limit: int,
     offset: int,
-) -> list[ApplicationsRowResponse]:
+    search: str | None = None,
+) -> list[ApplicationRowResponse]:
         query = """
             SELECT
                 o.id,
@@ -48,18 +49,23 @@ async def list_applications(
                 ON u.id = last_note.submitted_by
             WHERE o.status IN ('pending', 'rejected')
                 AND ($1::text IS NULL OR o.status = $1)
+                AND (
+                    $2::text IS NULL
+                    OR o.name ILIKE '%' || $2 || '%'
+                    OR o.contact_name ILIKE '%' || $2 || '%'
+                )
             ORDER BY
                 CASE
                     WHEN o.status = 'pending' THEN 0
                     ELSE 1
                 END,
                 o.created_at DESC
-            LIMIT $2 OFFSET $3
+            LIMIT $3 OFFSET $4
         """
 
-        rows = await conn.fetch(query, status_filter, limit, offset)
+        rows = await conn.fetch(query, status_filter, search, limit, offset)
 
-        applications: list[ApplicationsRowResponse] = []
+        applications: list[ApplicationRowResponse] = []
 
         for row in rows:
             last_internal_note = None
@@ -72,7 +78,7 @@ async def list_applications(
                 )
 
             applications.append(
-                ApplicationsRowResponse(
+                ApplicationRowResponse(
                     id=row["id"],
                     name=row["name"],
                     status=row["status"],
@@ -92,25 +98,31 @@ async def list_active_partners(
     conn: asyncpg.Connection,
     limit: int,
     offset: int,
-) -> list[ActivePartnersResponse]:
+    search: str | None = None,
+) -> list[ActivePartnerResponse]:
         query = """
                 SELECT 
-                    id, 
-                    name, 
-                    city,
-                    province,
-                    contact_name,
-                    approved_at
-                FROM organizations
-                WHERE status = 'approved'
-                ORDER BY approved_at DESC
-                LIMIT $1 OFFSET $2
+                    o.id, 
+                    o.name, 
+                    o.city,
+                    o.province,
+                    o.contact_name,
+                    o.approved_at
+                FROM organizations o
+                WHERE o.status = 'approved'
+                    AND (
+                        $1::text IS NULL
+                        OR o.name ILIKE '%' || $1 || '%'
+                        OR o.contact_name ILIKE '%' || $1 || '%'
+                    )
+                ORDER BY o.approved_at DESC
+                LIMIT $2 OFFSET $3
             """
 
-        rows = await conn.fetch(query, limit, offset)
+        rows = await conn.fetch(query, search, limit, offset)
 
         return [
-             ActivePartnersResponse(
+             ActivePartnerResponse(
                 id=row["id"],
                 name=row["name"],
                 city=row["city"],
@@ -164,37 +176,42 @@ async def get_organization(
     organization = parse_jsonb_fields(dict(row))
     notes = organization.get("notes", [])
 
-    if notes:
-        submitted_by_ids = [
-            UUID(note["submitted_by"])
-            for note in notes
-            if note.get("submitted_by")
-        ]
+    submitted_by_ids = {
+        UUID(note["submitted_by"])
+        for note in notes
+        if note.get("submitted_by")
+    }
 
-        user_rows = await conn.fetch(
+    submitted_by_names: dict[str, str] = {}
+
+    if submitted_by_ids:
+        users = await conn.fetch(
             """
             SELECT id, name
             FROM public.users
             WHERE id = ANY($1::uuid[])
             """,
-            submitted_by_ids,
+            list(submitted_by_ids),
         )
 
-        user_names = {
-            user["id"]: user["name"]
-            for user in user_rows
+        submitted_by_names = {
+            str(user["id"]): user["name"]
+            for user in users
         }
 
         for note in notes:
             submitted_by = note.get("submitted_by")
-            if submitted_by:
-                note["submitted_by_name"] = user_names.get(
-                    UUID(submitted_by)
-                )
-            else:
-                note["submitted_by_name"] = None
 
-    return OrganizationAdminApplicationResponse(**parse_jsonb_fields(dict(row)))
+            note["submitted_by_name"] = (
+                submitted_by_names.get(str(submitted_by))
+
+                if submitted_by
+                else None
+            )
+
+    organization["notes"] = notes
+
+    return OrganizationAdminApplicationResponse(**organization)
 
 
 async def add_internal_note(
@@ -229,8 +246,8 @@ async def add_internal_note(
 
     if not row:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Pending organization application not found.",
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Organization was not found or is no longer pending.",
         )
 
     saved_note = parse_jsonb_value(row["saved_note"], {})

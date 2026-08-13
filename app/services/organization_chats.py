@@ -89,7 +89,7 @@ async def verify_chat_access(
     admin = await conn.fetchval(
         """
         SELECT is_admin
-        FROM users
+        FROM public.users
         WHERE id = $1
         """,
         user_id,
@@ -262,6 +262,15 @@ async def send_message(
         json.dumps(body.subject) if body.subject is not None else None,
     )
 
+    await conn.execute(
+        """
+        UPDATE organization_chats
+        SET updated_at = now()
+        WHERE id = $1
+        """,
+        chat_id,
+    )
+
     row_data = dict(row)
     row_data["subject"] = parse_jsonb_value(row_data.get("subject"), None)
 
@@ -281,7 +290,7 @@ async def send_message(
 # ============================================================
 async def list_chats(
     conn: asyncpg.Connection,
-    name: str | None = None,
+    search: str | None = None,
     cursor_id: UUID | None = None,
     cursor_updated_at: datetime | None = None,
 ) -> list[ChatListItemResponse]:
@@ -291,8 +300,7 @@ async def list_chats(
     of the most recent message, if one exists.
     """
 
-    rows = await conn.fetch(
-        """
+    query = """
         SELECT
             oc.id,
             oc.organization_id,
@@ -306,8 +314,10 @@ async def list_chats(
             lm.created_at AS last_message_created_at,
             lm.is_deleted AS last_message_is_deleted
         FROM organization_chats oc
+        
         JOIN organizations o
             ON o.id = oc.organization_id
+
         LEFT JOIN LATERAL (
             SELECT
                 m.id,
@@ -318,16 +328,24 @@ async def list_chats(
                 m.created_at,
                 m.is_deleted
             FROM organization_messages m
+
             LEFT JOIN public.users u
                 ON u.id = m.sender_id
+
             LEFT JOIN organizations sender_org
                 ON sender_org.admin_user_id = m.sender_id
+
             WHERE m.chat_id = oc.id
             ORDER BY m.created_at DESC, m.id DESC
             LIMIT 1
         ) lm ON TRUE
+
         WHERE
-            ($1::text IS NULL OR o.name ILIKE '%' || $1 || '%')
+            (
+                $1::text IS NULL
+                OR o.name ILIKE '%' || $1 || '%'
+                OR o.contact_name ILIKE '%' || $1 || '%'
+            )
             AND (
                 $2::timestamptz IS NULL
                 OR oc.updated_at < $2
@@ -335,8 +353,11 @@ async def list_chats(
             )
         ORDER BY oc.updated_at DESC, oc.id DESC
         LIMIT 50
-        """,
-        name,
+    """
+
+    rows = await conn.fetch(
+        query,
+        search,
         cursor_updated_at,
         cursor_id,
     )
@@ -373,6 +394,37 @@ async def list_chats(
         )
 
     return chats
+
+async def get_chat_by_organization(
+    conn: asyncpg.Connection,
+    organization_id: UUID,
+) -> ChatResponse:
+    """
+    Retrieve an organization's chat. Currently used for admin access to a chat via the organization ID.
+    """
+    row = await conn.fetchrow(
+        """
+       SELECT
+            oc.id,
+            oc.organization_id,
+            o.name AS organization_name,
+            oc.created_at,
+            oc.updated_at
+        FROM organization_chats oc
+        JOIN organizations o
+            ON o.id = oc.organization_id
+        WHERE oc.organization_id = $1
+        """,
+        organization_id,
+    )
+
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Organization chat not found.',
+        )
+
+    return ChatResponse(**dict(row))
 
 # TODO: Add reply-to support with validation.
 
