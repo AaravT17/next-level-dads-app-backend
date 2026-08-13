@@ -49,7 +49,6 @@ class OrganizationSummaryResponse(BaseModel):
     name: str
     status: Literal["pending", "approved", "rejected"]
     created_at: datetime
-    updated_at: datetime
 
 class OrganizationApplicationDecision(BaseModel):
     status: Literal['approved', 'rejected']

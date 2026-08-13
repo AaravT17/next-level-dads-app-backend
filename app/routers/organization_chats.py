@@ -34,13 +34,16 @@ async def get_messages(
 
 @router.get('/', response_model=list[ChatListItemResponse])
 async def list_chats(
-    name: str | None = Query(None),
+    search: str | None = Query(None),
     cursor_id: UUID | None = Query(None),
     cursor_updated_at: datetime | None = Query(None),
     _admin: str = Depends(get_admin_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    return await organization_chats_service.list_chats(name=name, cursor_id=cursor_id, cursor_updated_at=cursor_updated_at, conn=conn)
+    return await organization_chats_service.list_chats(
+        search=search, cursor_id=cursor_id, cursor_updated_at=cursor_updated_at, conn=conn
+    )
+
 
 @router.get("/{chat_id}", response_model=ChatResponse)
 async def get_chat(
@@ -49,3 +52,11 @@ async def get_chat(
     _admin: str = Depends(get_admin_user),
 ):
     return await organization_chats_service.get_organization_chat(chat_id=chat_id, conn=conn)
+
+@router.get("/organizations/{organization_id}/chat", response_model=ChatResponse)
+async def get_chat_by_organization(
+    organization_id: UUID,
+    conn: asyncpg.Connection = Depends(get_db),
+    _admin: str = Depends(get_admin_user),
+):
+    return await organization_chats_service.get_chat_by_organization(organization_id=organization_id, conn=conn)
