@@ -113,3 +113,7 @@ def ReportContentLimiter():
 
 def ReportUserLimiter():
     return RateLimiter(times=10, hours=1, identifier=user_id_key, callback=rate_limit_exceeded_callback)
+
+# ── Events (user_id-keyed) ─────────────────────────────────────────────────
+def CreateEventLimiter():
+    return RateLimiter(times=5, hours=24, identifier=user_id_key, callback=rate_limit_exceeded_callback)

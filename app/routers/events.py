@@ -7,6 +7,7 @@ import asyncpg
 from uuid import UUID
 from datetime import datetime
 from app.services.events import build_discover_events_query, build_get_event_by_id_query
+from app.config.rate_limits import CreateEventLimiter
 
 
 
@@ -268,6 +269,11 @@ async def update_event(
 
 # TODO: For partners to view their event listings
 # -- FIX: Getting unknown error message 
+# @router.get('/my-partner-events')
+# async def get_partner_events():
+#     print("Testing")
+
+
 # @router.get(
 #     '/my-partner-events',
 #     response_model=list[PartnerEventResponse],
