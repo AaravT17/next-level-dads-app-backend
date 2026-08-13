@@ -14,6 +14,7 @@ from app.routers.moderation import router as moderation_router
 from app.routers.admin import router as admin_router
 from app.routers.chats import router as chats_router
 from app.routers.ws import router as ws_router
+from app.routers.organizations_events import router as organizations_events_router
 from app.routers.organizations import router as organizations_router
 from app.routers.organization_chats import router as organization_chats_router
 from app.config.redis import init_redis, close_redis, get_redis
@@ -81,3 +82,4 @@ app.include_router(moderation_router)
 app.include_router(admin_router)
 app.include_router(chats_router)
 app.include_router(ws_router)
+app.include_router(organizations_events_router)
