@@ -31,7 +31,6 @@ from fastapi_limiter import FastAPILimiter
 from app.config.rate_limits import is_production
 
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
