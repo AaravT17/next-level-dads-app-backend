@@ -61,38 +61,3 @@ class InternalNoteResponse(BaseModel):
     submitted_by: UUID
     content: str
     submitted_at: datetime
-
-class InternalNotePreviewResponse(BaseModel):
-    """Condensed internal note included in application list responses."""
-    submitted_by_name: str | None = None
-    content: str
-    submitted_at: datetime
-
-# ── List Views ────────────────────────────────────────────────
-class ActionItemResponse(BaseModel):
-    """Summary of a pending organization application for the action-items list on admin/Overview."""
-    id: UUID
-    name: str
-    status: Literal["pending", "approved", "rejected"]
-    created_at: datetime
-
-class ApplicationRowResponse(BaseModel):
-    """Summary of an organization application for the applications list on admin/Organizations."""
-    id: UUID
-    name: str
-    status: Literal['pending', 'rejected']
-    city: str
-    province: str
-    contact_name: str
-    created_at: datetime
-    updated_at: datetime
-
-    
-class ActivePartnerResponse(BaseModel):
-    """Summary of an approved organization for the active partners list on admin/Organizations."""
-    id: UUID
-    name: str
-    city: str
-    province: str
-    contact_name: str
-    approved_at: datetime

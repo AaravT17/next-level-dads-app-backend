@@ -5,6 +5,7 @@ from app.models.organizations import OrganizationApplicationDecision, Organizati
 from uuid import UUID
 from fastapi import HTTPException, status
 from app.utils.json_utils import parse_jsonb_fields, parse_jsonb_value
+from app.utils.organizations import parse_jsonb_fields, parse_jsonb_value
 
 async def list_organizations(
     conn: asyncpg.Connection,
@@ -47,47 +48,7 @@ async def get_organization(
             status_code=status.HTTP_404_NOT_FOUND,
             detail='Organization not found.',
         )
-
-    organization = parse_jsonb_fields(dict(row))
-    notes = organization.get("notes", [])
-
-    # Resolve internal note author IDs to display names for the admin note history.
-    submitted_by_ids = {
-        UUID(note["submitted_by"])
-        for note in notes
-        if note.get("submitted_by")
-    }
-
-    submitted_by_names: dict[str, str] = {}
-
-    if submitted_by_ids:
-        users = await conn.fetch(
-            """
-            SELECT id, name
-            FROM public.users
-            WHERE id = ANY($1::uuid[])
-            """,
-            list(submitted_by_ids),
-        )
-
-        submitted_by_names = {
-            str(user["id"]): user["name"]
-            for user in users
-        }
-
-        for note in notes:
-            submitted_by = note.get("submitted_by")
-
-            note["submitted_by_name"] = (
-                submitted_by_names.get(str(submitted_by))
-
-                if submitted_by
-                else None
-            )
-
-    organization["notes"] = notes
-
-    return OrganizationAdminApplicationResponse(**organization)
+    return OrganizationAdminApplicationResponse(**parse_jsonb_fields(dict(row)))
 
 async def add_internal_note(
     conn: asyncpg.Connection,
