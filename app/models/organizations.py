@@ -3,7 +3,7 @@ from uuid import UUID
 from datetime import datetime
 from typing import Literal
 
-# ── Organization Application Models ───────────────────────────────────
+
 class OrganizationApplicationCreate(BaseModel):
     name: str = Field(max_length=200)
     email: EmailStr
@@ -43,17 +43,22 @@ class OrganizationAdminApplicationResponse(
 ):
     notes: list[InternalNoteResponse]
 
+class OrganizationSummaryResponse(BaseModel):
+    id: UUID
+    name: str
+    status: Literal["pending", "approved", "rejected"]
+    created_at: datetime
+    updated_at: datetime
+
 class OrganizationApplicationDecision(BaseModel):
     status: Literal['approved', 'rejected']
 
-# ── Internal Note Models ─────────────────────────────────────────────
 class InternalNoteCreate(BaseModel):
     content: str = Field(min_length=1, max_length=2000)
 
 class InternalNoteResponse(BaseModel):
     id: UUID
     submitted_by: UUID
-    submitted_by_name: str | None = None
     content: str
     submitted_at: datetime
 
