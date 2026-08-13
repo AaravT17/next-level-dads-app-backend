@@ -7,9 +7,36 @@ from app.dependencies.db import get_db
 from app.models.organization_chats import (ChatResponse, SendMessageRequest, MessageResponse, LastMessageResponse, ChatListItemResponse)
 from app.services import organization_chats as organization_chats_service
 
-router = APIRouter(
-    prefix="/api/organization-chats", tags=["Organization Messaging"]
-)
+router = APIRouter(prefix="/api/organization-chats", tags=["Organization Messaging"])
+
+# ── Partner Messaging ─────────────────────────────────────────────
+
+@router.get('/me', response_model=ChatResponse)
+async def get_my_chat(
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        query = """
+            SELECT oc.id, oc.organization_id, o.name AS organization_name, oc.created_at, oc.updated_at
+            FROM organization_chats oc
+            JOIN organizations o ON o.id = oc.organization_id
+            JOIN organization_representatives r ON r.organization_id = oc.organization_id
+            WHERE r.user_id = $1
+        """
+        res = await conn.fetchrow(query, UUID(user_id))
+        if not res:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='No chat found.')
+        return ChatResponse(**dict(res))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch chat. Please try again later.',
+        )
+
+# ── Shared Messaging ─────────────────────────────────────────────
 
 @router.post("/{chat_id}/messages", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
 async def send_message(
@@ -52,6 +79,7 @@ async def get_chat(
     _admin: str = Depends(get_admin_user),
 ):
     return await organization_chats_service.get_organization_chat(chat_id=chat_id, conn=conn)
+
 
 @router.get("/organizations/{organization_id}/chat", response_model=ChatResponse)
 async def get_chat_by_organization(

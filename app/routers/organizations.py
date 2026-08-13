@@ -200,6 +200,15 @@ async def get_organization(
             detail='Failed to fetch application. Please try again later.',
         )
 
+# TODO: Move/aggregate organization action items into a shared admin overview endpoint once event/resource action items exist.
+@router.get("/action-items", response_model=list[ActionItemResponse])
+async def list_organization_action_items(
+    limit: int = Query(5, ge=1, le=20),
+    conn: asyncpg.Connection = Depends(get_db),
+    _admin: str = Depends(get_admin_user),
+):
+    return await organization_service.list_organization_action_items(conn=conn,limit=limit)
+
 @router.post('/{organization_id}/notes', response_model=InternalNoteResponse, status_code=status.HTTP_201_CREATED)
 async def add_internal_note(
     organization_id: UUID,  
@@ -209,7 +218,7 @@ async def add_internal_note(
 ):
     return await organization_service.add_internal_note(conn=conn, organization_id=organization_id, submitted_by=UUID(submitted_by), content=payload.content)
 
-@router.patch('/{organization_id}/decision', response_model=OrganizationApplicationResponse)
+@router.patch('/{organization_id}/decision', response_model=OrganizationAdminApplicationResponse)
 async def decide_application(
     id: UUID,
     payload: OrganizationApplicationDecision,

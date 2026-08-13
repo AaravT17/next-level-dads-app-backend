@@ -20,125 +20,169 @@ async def list_organizations(
     offset: int,
     search: str | None = None,
 ) -> list[ApplicationRowResponse]:
-        query = """
+    """
+    Return pending and rejected organization applications for the admin review list.
+    Supports optional status filtering, organization/contact search, pagination,
+    and a preview of the most recent internal note for each application.
+    """
+    query = """
+        SELECT
+            o.id,
+            o.name,
+            o.status, 
+            o.city,
+            o.province,
+            o.contact_name,
+            o.created_at,
+            o.updated_at,
+            last_note.content AS last_note_content,
+            last_note.submitted_at AS last_note_submitted_at,
+            u.name AS last_note_submitted_by_name
+        FROM organizations o
+        
+        -- Select only the most recent internal note for each organization.
+        LEFT JOIN LATERAL (
             SELECT
-                o.id,
-                o.name,
-                o.status,
-                o.city,
-                o.province,
-                o.contact_name,
-                o.created_at,
-                o.updated_at,
-                last_note.content AS last_note_content,
-                last_note.submitted_at AS last_note_submitted_at,
-                u.name AS last_note_submitted_by_name
-            FROM organizations o
-            
-            LEFT JOIN LATERAL (
-                SELECT
-                    note ->> 'content' AS content,
-                    (note ->> 'submitted_by')::uuid AS submitted_by,
-                    (note ->> 'submitted_at')::timestamptz AS submitted_at
-                FROM jsonb_array_elements(o.notes)
-                    WITH ORDINALITY AS n(note, position)
-                ORDER BY position DESC
-                LIMIT 1
-            ) last_note ON TRUE
+                note ->> 'content' AS content,
+                (note ->> 'submitted_by')::uuid AS submitted_by,
+                (note ->> 'submitted_at')::timestamptz AS submitted_at
+            FROM jsonb_array_elements(o.notes)
+                WITH ORDINALITY AS n(note, position)
+            ORDER BY position DESC
+            LIMIT 1
+        ) last_note ON TRUE
 
-            LEFT JOIN public.users u
-                ON u.id = last_note.submitted_by
-            WHERE o.status IN ('pending', 'rejected')
-                AND ($1::text IS NULL OR o.status = $1)
-                AND (
-                    $2::text IS NULL
-                    OR o.name ILIKE '%' || $2 || '%'
-                    OR o.contact_name ILIKE '%' || $2 || '%'
-                )
-            ORDER BY
-                CASE
-                    WHEN o.status = 'pending' THEN 0
-                    ELSE 1
-                END,
-                o.created_at DESC
-            LIMIT $3 OFFSET $4
-        """
+        LEFT JOIN public.users u
+            ON u.id = last_note.submitted_by
+        WHERE o.status IN ('pending', 'rejected')
+            AND ($1::text IS NULL OR o.status = $1)
+            AND (
+                $2::text IS NULL
+                OR o.name ILIKE '%' || $2 || '%'
+                OR o.contact_name ILIKE '%' || $2 || '%'
+            )
+        -- Show pending applications before rejected applications.
+        ORDER BY
+            CASE
+                WHEN o.status = 'pending' THEN 0
+                ELSE 1
+            END,
+            o.created_at DESC
+        LIMIT $3 OFFSET $4
+    """
 
-        rows = await conn.fetch(query, status_filter, search, limit, offset)
+    rows = await conn.fetch(query, status_filter, search, limit, offset)
 
-        applications: list[ApplicationRowResponse] = []
+    applications: list[ApplicationRowResponse] = []
 
-        for row in rows:
-            last_internal_note = None
+    for row in rows:
+        last_internal_note = None
 
-            if row["last_note_content"] is not None:
-                last_internal_note = InternalNotePreviewResponse(
-                    submitted_by_name=row["last_note_submitted_by_name"],
-                    content=row["last_note_content"],
-                    submitted_at=row["last_note_submitted_at"],
-                )
-
-            applications.append(
-                ApplicationRowResponse(
-                    id=row["id"],
-                    name=row["name"],
-                    status=row["status"],
-                    city=row["city"],
-                    province=row["province"],
-                    contact_name=row["contact_name"],
-                    created_at=row["created_at"],
-                    updated_at=row["updated_at"],
-                    last_internal_note=last_internal_note,
-                )
+        if row["last_note_content"] is not None:
+            last_internal_note = InternalNotePreviewResponse(
+                submitted_by_name=row["last_note_submitted_by_name"],
+                content=row["last_note_content"],
+                submitted_at=row["last_note_submitted_at"],
             )
 
-        return applications
-
-
-async def list_active_partners(
-    conn: asyncpg.Connection,
-    limit: int,
-    offset: int,
-    search: str | None = None,
-) -> list[ActivePartnerResponse]:
-        query = """
-                SELECT 
-                    o.id, 
-                    o.name, 
-                    o.city,
-                    o.province,
-                    o.contact_name,
-                    o.approved_at
-                FROM organizations o
-                WHERE o.status = 'approved'
-                    AND (
-                        $1::text IS NULL
-                        OR o.name ILIKE '%' || $1 || '%'
-                        OR o.contact_name ILIKE '%' || $1 || '%'
-                    )
-                ORDER BY o.approved_at DESC
-                LIMIT $2 OFFSET $3
-            """
-
-        rows = await conn.fetch(query, search, limit, offset)
-
-        return [
-             ActivePartnerResponse(
+        applications.append(
+            ApplicationRowResponse(
                 id=row["id"],
                 name=row["name"],
+                status=row["status"],
                 city=row["city"],
                 province=row["province"],
                 contact_name=row["contact_name"],
-                approved_at=row["approved_at"]
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                last_internal_note=last_internal_note,
             )
-            for row in rows
-        ]
+        )
+
+    return applications
+
+
+async def list_active_partners(
+conn: asyncpg.Connection,
+limit: int,
+offset: int,
+search: str | None = None,
+) -> list[ActivePartnerResponse]:
+    """
+    Return approved organizations for the admin active partners list.
+    Supports optional organization/contact search and pagination.
+    """
+    query = """
+            SELECT 
+                o.id, 
+                o.name, 
+                o.city,
+                o.province,
+                o.contact_name,
+                o.approved_at
+            FROM organizations o
+            WHERE o.status = 'approved'
+                AND (
+                    $1::text IS NULL
+                    OR o.name ILIKE '%' || $1 || '%'
+                    OR o.contact_name ILIKE '%' || $1 || '%'
+                )
+            ORDER BY o.approved_at DESC
+            LIMIT $2 OFFSET $3
+        """
+
+    rows = await conn.fetch(query, search, limit, offset)
+
+    return [
+            ActivePartnerResponse(
+            id=row["id"],
+            name=row["name"],
+            city=row["city"],
+            province=row["province"],
+            contact_name=row["contact_name"],
+            approved_at=row["approved_at"]
+        )
+        for row in rows
+    ]
+
+
+async def list_organization_action_items(
+    conn: asyncpg.Connection,
+    limit: int = 5,
+) -> list[ActionItemResponse]:
+    """
+    Return the oldest pending organization applications for the admin action-items list.
+    Results are ordered by creation date and limited to the requested number of items.
+    """
+    query = """
+        SELECT
+            id,
+            name,
+            created_at
+        FROM organizations
+        WHERE status = 'pending'
+        ORDER BY created_at ASC
+        LIMIT $1
+    """
+
+    rows = await conn.fetch(query, limit)
+
+    return [
+        ActionItemResponse(**dict(row))
+        for row in rows
+    ]
 
 
 async def get_organization(
     conn: asyncpg.Connection,
     organization_id: UUID,
 ) -> OrganizationAdminApplicationResponse:
+    """
+    Return the full organization application for admin review.
+    Includes submitted application data and internal notes, with note author
+    names resolved from the public users table.
+    """
+    
     query = """
         SELECT *
         FROM organizations
@@ -154,6 +198,7 @@ async def get_organization(
     organization = parse_jsonb_fields(dict(row))
     notes = organization.get("notes", [])
 
+    # Resolve internal note author IDs to display names for the admin note history.
     submitted_by_ids = {
         UUID(note["submitted_by"])
         for note in notes
@@ -197,9 +242,16 @@ async def add_internal_note(
     submitted_by: UUID,
     content: str,
 ) -> InternalNoteResponse:
+    """
+    Append an internal admin note to a pending organization application.
+    Stores the note in the organization's JSONB notes array, returns the newly
+    saved note, and resolves the submitting admin's display name.
+    """
+    
     query = """
         UPDATE organizations
         SET
+        -- Append the new note to the existing JSONB notes array.
             notes = notes || jsonb_build_array(
                 jsonb_build_object(
                     'id', gen_random_uuid(),
@@ -211,6 +263,7 @@ async def add_internal_note(
             updated_at = now()
         WHERE id = $1
           AND status = 'pending'
+        -- Return only the newly appended note.
         RETURNING notes -> -1 AS saved_note
     """
 
@@ -229,7 +282,17 @@ async def add_internal_note(
 
     saved_note = parse_jsonb_value(row["saved_note"], {})
 
-    return InternalNoteResponse(**saved_note)
+    # Resolve the submitting admin's display name for the response.
+    submitted_by_name = await conn.fetchval(
+        """
+        SELECT name
+        FROM public.users
+        WHERE id = $1
+        """,
+        submitted_by,
+    )
+
+    return InternalNoteResponse(**saved_note, submitted_by_name=submitted_by_name)
 
 
 async def decide_application(
@@ -237,6 +300,13 @@ async def decide_application(
     organization_id: UUID,
     decision: OrganizationApplicationDecision,
 ) -> OrganizationAdminApplicationResponse:
+    """
+    Approve or reject a pending organization application.
+
+    Updates the application status and records the approva_at timestamp when
+    approved. Only applications that are currently pending can be decided.
+    """
+    
     query = """
         UPDATE organizations
         SET status = $2,
