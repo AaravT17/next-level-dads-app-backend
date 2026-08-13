@@ -57,7 +57,24 @@ class OrganizationSummaryResponse(BaseModel):
     name: str
     status: Literal["pending", "approved", "rejected"]
     created_at: datetime
+
+class ApplicationRowResponse(BaseModel):
+    id: UUID
+    name: str
+    status: Literal['pending', 'rejected']
+    city: str
+    province: str
+    contact_name: str
+    created_at: datetime
     updated_at: datetime
 
 class OrganizationApplicationDecision(BaseModel):
     status: Literal['approved', 'rejected']
+    
+class ActivePartnerResponse(BaseModel):
+    id: UUID
+    name: str
+    city: str
+    province: str
+    contact_name: str
+    approved_at: datetime
