@@ -43,7 +43,6 @@ from app.routers.organizations_events import router as organizations_events_rout
 
 
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -108,5 +107,5 @@ app.include_router(organization_chats.router)
 app.include_router(organizations_events_router)
 app.include_router(organization_chats.router)
 app.include_router(organization_chats.router)
+app.include_router(organizations_router)
 app.include_router(organizations_events_router)
-app.include_router(organization_chats.router)

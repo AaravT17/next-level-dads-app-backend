@@ -6,6 +6,24 @@ from fastapi import status, HTTPException
 from app.models.organization_chats import (ChatResponse, SendMessageRequest, MessageResponse, LastMessageResponse, ChatListItemResponse)
 from app.utils.json_utils import parse_jsonb_value
 
+async def create_organization_chat(
+    conn: asyncpg.Connection,
+    organization_id: UUID,
+) -> None:
+    """
+    Create the single organization chat associated with a newly created organization.
+    This is intended to run during the organization application submission flow,
+    after the organization and organization representative records are created.
+    """
+
+    await conn.execute(
+        """
+        INSERT INTO organization_chats (organization_id)
+        VALUES ($1)
+        """,
+        organization_id,
+    )
+
 # ============================================================
 # Shared Admin + Partner Messaging
 # ============================================================
@@ -41,7 +59,7 @@ async def verify_chat_access(
     admin = await conn.fetchval(
         """
         SELECT is_admin
-        FROM public.users
+        FROM users
         WHERE id = $1
         """,
         user_id,
@@ -214,15 +232,6 @@ async def send_message(
         json.dumps(body.subject) if body.subject is not None else None,
     )
 
-    await conn.execute(
-        """
-        UPDATE organization_chats
-        SET updated_at = now()
-        WHERE id = $1
-        """,
-        chat_id,
-    )
-
     row_data = dict(row)
     row_data["subject"] = parse_jsonb_value(row_data.get("subject"), None)
 
@@ -242,7 +251,7 @@ async def send_message(
 # ============================================================
 async def list_chats(
     conn: asyncpg.Connection,
-    search: str | None = None,
+    name: str | None = None,
     cursor_id: UUID | None = None,
     cursor_updated_at: datetime | None = None,
 ) -> list[ChatListItemResponse]:
@@ -252,7 +261,8 @@ async def list_chats(
     of the most recent message, if one exists.
     """
 
-    query = """
+    rows = await conn.fetch(
+        """
         SELECT
             oc.id,
             oc.organization_id,
@@ -266,10 +276,8 @@ async def list_chats(
             lm.created_at AS last_message_created_at,
             lm.is_deleted AS last_message_is_deleted
         FROM organization_chats oc
-        
         JOIN organizations o
             ON o.id = oc.organization_id
-
         LEFT JOIN LATERAL (
             SELECT
                 m.id,
@@ -280,24 +288,16 @@ async def list_chats(
                 m.created_at,
                 m.is_deleted
             FROM organization_messages m
-
             LEFT JOIN public.users u
                 ON u.id = m.sender_id
-
             LEFT JOIN organizations sender_org
                 ON sender_org.admin_user_id = m.sender_id
-
             WHERE m.chat_id = oc.id
             ORDER BY m.created_at DESC, m.id DESC
             LIMIT 1
         ) lm ON TRUE
-
         WHERE
-            (
-                $1::text IS NULL
-                OR o.name ILIKE '%' || $1 || '%'
-                OR o.contact_name ILIKE '%' || $1 || '%'
-            )
+            ($1::text IS NULL OR o.name ILIKE '%' || $1 || '%')
             AND (
                 $2::timestamptz IS NULL
                 OR oc.updated_at < $2
@@ -305,11 +305,8 @@ async def list_chats(
             )
         ORDER BY oc.updated_at DESC, oc.id DESC
         LIMIT 50
-    """
-
-    rows = await conn.fetch(
-        query,
-        search,
+        """,
+        name,
         cursor_updated_at,
         cursor_id,
     )
@@ -347,16 +344,16 @@ async def list_chats(
 
     return chats
 
-async def get_chat_by_organization(
+async def get_organization_chat(
     conn: asyncpg.Connection,
-    organization_id: UUID,
+    chat_id: UUID,
 ) -> ChatResponse:
     """
-    Retrieve an organization's chat. Currently used for admin access to a chat via the organization ID.
+    Retrieve the existing chat associated with an organization.
     """
     row = await conn.fetchrow(
         """
-       SELECT
+        SELECT
             oc.id,
             oc.organization_id,
             o.name AS organization_name,
@@ -365,59 +362,11 @@ async def get_chat_by_organization(
         FROM organization_chats oc
         JOIN organizations o
             ON o.id = oc.organization_id
-        WHERE oc.organization_id = $1
+        WHERE oc.id = $1
         """,
-        organization_id,
+        chat_id,
     )
 
-    if not row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail='Organization chat not found.',
-        )
-
-    return ChatResponse(**dict(row))
-
-async def create_organization_chat(
-    conn: asyncpg.Connection,
-    organization_id: UUID,
-) -> None:
-    """
-    Create the single organization chat associated with a newly created organization.
-    This is intended to run during the organization application submission flow,
-    after the organization and organization representative records are created.
-    """
-
-    await conn.execute(
-        """
-        INSERT INTO organization_chats (organization_id)
-        VALUES ($1)
-        """,
-        organization_id,
-    )
-
-# ============================================================
-# Partner Messaging
-# ============================================================
-
-async def get_organization_chat(
-    conn: asyncpg.Connection,
-    organization_id: UUID,
-) -> ChatResponse:
-    """
-    Retrieve the existing chat associated with an organization.
-    """
-
-    row = await conn.fetchrow(
-        """
-        SELECT id, organization_id, created_at, updated_at
-        FROM organization_chats
-        WHERE organization_id = $1
-        """,
-        organization_id,
-    )
-
-    # if missing → error
     if not row:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
