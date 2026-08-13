@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 # ------------------------------------------------------------------
 
 class ChatResponse(BaseModel):
+    """Organization chat returned to an authenticated organization representative."""
     id: UUID
     organization_id: UUID
     organization_name: str
@@ -33,6 +34,7 @@ class OrganizationMessageResponse(BaseModel):
 # ------------------------------------------------------------------
 
 class SendMessageRequest(BaseModel):
+    """Request payload for sending a message in an organization chat."""
     content: str = Field(..., min_length=1, max_length=2000)
 
     # Optional metadata for future event/resource message integration.
@@ -50,6 +52,7 @@ class SendMessageRequest(BaseModel):
         return stripped_content
 
 class MessageResponse(BaseModel):
+    """Organization chat message returned with optional sender display information."""
     id: UUID
     chat_id: UUID
 
@@ -75,6 +78,7 @@ class MessageResponse(BaseModel):
 # ------------------------------------------------------------------
 
 class LastMessageResponse(BaseModel):
+    """Condensed organization message included in chat-list previews."""
     id: UUID
     content: str
     sender_id: UUID | None = None
@@ -86,10 +90,10 @@ class LastMessageResponse(BaseModel):
 
 class ChatListItemResponse(BaseModel):
     """
-    Admin chat-list row.
+    Organization chat summary for the admin chat list.
 
-    organization_name is obtained by joining organization_chats
-    to organizations.
+    Organization details are populated by joining organization_chats
+    with organizations.
     """
 
     id: UUID

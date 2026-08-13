@@ -5,6 +5,7 @@ from typing import Literal
 
 # ── Organization Application Models ───────────────────────────────────
 class OrganizationApplicationCreate(BaseModel):
+    """Payload submitted by an organization when applying to become a partner."""
     name: str = Field(max_length=200)
     email: EmailStr
     phone: str | None = None
@@ -19,6 +20,7 @@ class OrganizationApplicationCreate(BaseModel):
     application_answers: dict[str, str] = {}
 
 class OrganizationApplicationResponse(BaseModel):
+    """Full organization application record returned after submission or lookup."""
     id: UUID
     admin_user_id: UUID
     name: str
@@ -41,16 +43,20 @@ class OrganizationApplicationResponse(BaseModel):
 class OrganizationAdminApplicationResponse(
     OrganizationApplicationResponse
 ):
+    """Admin view of an organization application, including internal notes."""
     notes: list[InternalNoteResponse]
 
 class OrganizationApplicationDecision(BaseModel):
+    """Admin decision applied to a pending organization application."""
     status: Literal['approved', 'rejected']
 
 # ── Internal Note Models ─────────────────────────────────────────────
 class InternalNoteCreate(BaseModel):
+    """Payload for an admin-only internal note on an organization application."""
     content: str = Field(min_length=1, max_length=2000)
 
 class InternalNoteResponse(BaseModel):
+    """Full internal note returned in organization application detail responses."""
     id: UUID
     submitted_by: UUID
     submitted_by_name: str | None = None
@@ -58,17 +64,20 @@ class InternalNoteResponse(BaseModel):
     submitted_at: datetime
 
 class InternalNotePreviewResponse(BaseModel):
+    """Condensed internal note included in application list responses."""
     submitted_by_name: str | None = None
     content: str
     submitted_at: datetime
 
 # ── List Views ────────────────────────────────────────────────
 class ActionItemResponse(BaseModel):
+    """Summary of a pending organization application for the action-items list on admin/Overview."""
     id: UUID
     name: str
     created_at: datetime
 
 class ApplicationRowResponse(BaseModel):
+    """Summary of an organization application for the applications list on admin/Organizations."""
     id: UUID
     name: str
     status: Literal['pending', 'rejected']
@@ -80,6 +89,7 @@ class ApplicationRowResponse(BaseModel):
     last_internal_note: InternalNotePreviewResponse | None = None
 
 class ActivePartnerResponse(BaseModel):
+    """Summary of an approved organization for the active partners list on admin/Organizations."""
     id: UUID
     name: str
     city: str

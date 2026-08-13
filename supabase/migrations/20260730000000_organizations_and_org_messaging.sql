@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS organization_messages (
     content         TEXT NOT NULL,
     subject         JSONB,
     edited_at       TIMESTAMPTZ,
-    is_deleted      BOOLEAN DEFAULT false,
+    is_deleted      BOOLEAN NOT NULL DEFAULT false,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

@@ -24,7 +24,7 @@ from app.config.constants import (
     MAX_CITY_LENGTH,
     MAX_BIO_LENGTH,
 )
-from app.dependencies.auth import get_current_user, get_consented_user
+from app.dependencies.auth import get_current_user, get_consented_user, get_dad_app_access_user
 from app.models.users import MeResponse, UserProfileResponse, UserStatsResponse, UpdatePreferencesRequest
 from app.models.communities import CommunityResponse
 from app.models.events import EventResponse
@@ -55,7 +55,8 @@ def _is_18_or_older(dob: date) -> bool:
 
 
 @router.get('/me', response_model=MeResponse)
-async def get_curr_user(conn: asyncpg.Connection = Depends(get_db), user_id: str = Depends(get_current_user)):
+# Updated user_id return dependency to ensure authenticated organization accounts cannot make a Dad-app profile.
+async def get_curr_user(conn: asyncpg.Connection = Depends(get_db), user_id: str = Depends(get_dad_app_access_user)):
     try:
         query, params = build_get_me_query(user_id=user_id)
         res = await conn.fetchrow(query, *params)
@@ -106,9 +107,9 @@ async def get_user(
     '/',
     status_code=status.HTTP_201_CREATED,
     response_model=MeResponse,
-    dependencies=[Depends(get_current_user), Depends(CreateProfileLimiter())]
+    dependencies=[Depends(get_dad_app_access_user), Depends(CreateProfileLimiter())]
     if is_production()
-    else [Depends(get_current_user)],
+    else [Depends(get_dad_app_access_user)],
 )
 async def create_user(
     request: Request,
@@ -514,7 +515,8 @@ async def get_user_stats(
 @router.post('/me/legal-acceptances', status_code=status.HTTP_204_NO_CONTENT)
 async def accept_legal_documents(
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    # Updated user_id return dependency to ensure authenticated organization accounts cannot record legal acceptances.
+    user_id: str = Depends(get_dad_app_access_user),
 ):
     try:
         query = """
