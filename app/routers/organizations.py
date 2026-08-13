@@ -1,26 +1,21 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 import asyncpg
 import json
-from typing import Literal
 from uuid import UUID
+
 from app.dependencies.auth import get_current_user, get_admin_user
 from app.dependencies.db import get_db
 from app.models.organizations import (
-    ActivePartnerResponse,
-    ApplicationRowResponse,
     OrganizationApplicationCreate,
     OrganizationApplicationResponse,
     OrganizationApplicationDecision,
     OrganizationAdminApplicationResponse,
     InternalNoteCreate,
     InternalNoteResponse,
-    ActionItemResponse,
-    ApplicationRowResponse,
-    ActivePartnerResponse
+    OrganizationSummaryResponse
 )
 from app.services import organizations as organization_service
-from app.services import organization_chats as organization_chats_service
-from app.utils.json_utils import parse_jsonb_fields
+from app.utils.organizations import parse_jsonb_fields
 
 router = APIRouter(prefix='/api/organizations', tags=['organizations'])
 
@@ -65,10 +60,6 @@ async def submit_application(
                 """,
                 res['id'],
                 UUID(user_id),
-            )
-            await organization_chats_service.create_organization_chat(
-                conn=conn,
-                organization_id=res["id"],
             )
             return OrganizationApplicationResponse(**parse_jsonb_fields(dict(res)))
     except Exception as e:
@@ -155,26 +146,16 @@ async def update_my_application(
 
 # ── Admin Review  ─────────────────────────────────────────────
 
-@router.get('/applications', response_model=list[ApplicationRowResponse])
-async def list_applications(
-    status_filter: Literal["pending", "rejected"] | None = Query(None, alias='status'),
-    search: str | None = Query(None),
+@router.get('/', response_model=list[OrganizationSummaryResponse])
+async def list_organizations(
+    status_filter: str | None = Query(None, alias='status'),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     conn: asyncpg.Connection = Depends(get_db),
     _admin: str = Depends(get_admin_user)
 ):
-    return await organization_service.list_applications(conn=conn, status_filter=status_filter, search=search, limit=limit, offset=offset)
+    return await organization_service.list_organizations(conn=conn, status_filter=status_filter, limit=limit, offset=offset)
 
-@router.get('/active', response_model=list[ActivePartnerResponse])
-async def list_active_partners(
-    search: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user)
-):
-    return await organization_service.list_active_partners(conn=conn, search=search, limit=limit, offset=offset)
 
 @router.get('/{organization_id}', response_model=OrganizationAdminApplicationResponse)
 async def get_organization(
@@ -183,15 +164,6 @@ async def get_organization(
     _admin: str = Depends(get_admin_user)
 ):
     return await organization_service.get_organization(conn=conn, organization_id=organization_id)
-
-# TODO: Move/aggregate organization action items into a shared admin overview endpoint once event/resource action items exist.
-@router.get("/action-items", response_model=list[ActionItemResponse])
-async def list_organization_action_items(
-    limit: int = Query(5, ge=1, le=20),
-    conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user),
-):
-    return await organization_service.list_organization_action_items(conn=conn,limit=limit)
 
 @router.post('/{organization_id}/notes', response_model=InternalNoteResponse, status_code=status.HTTP_201_CREATED)
 async def add_internal_note(
@@ -202,7 +174,7 @@ async def add_internal_note(
 ):
     return await organization_service.add_internal_note(conn=conn, organization_id=organization_id, submitted_by=UUID(submitted_by), content=payload.content)
 
-@router.patch('/{organization_id}/decision', response_model=OrganizationAdminApplicationResponse)
+@router.patch('/{organization_id}/decision', response_model=OrganizationApplicationResponse)
 async def decide_application(
     organization_id: UUID,
     payload: OrganizationApplicationDecision,
