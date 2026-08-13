@@ -68,7 +68,7 @@ class ActionItemResponse(BaseModel):
     name: str
     created_at: datetime
 
-class ApplicationsRowResponse(BaseModel):
+class ApplicationRowResponse(BaseModel):
     id: UUID
     name: str
     status: Literal['pending', 'rejected']
@@ -79,7 +79,7 @@ class ApplicationsRowResponse(BaseModel):
     updated_at: datetime
     last_internal_note: InternalNotePreviewResponse | None = None
 
-class ActivePartnersResponse(BaseModel):
+class ActivePartnerResponse(BaseModel):
     id: UUID
     name: str
     city: str
