@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from supabase_auth.errors import AuthApiError
-from app.config.supabase import get_supabase
+from app.config.supabase import get_supabase, get_supabase_admin
 from app.models.auth import (
     RegisterRequest,
     LoginRequest,
@@ -131,3 +131,42 @@ async def refresh_token(request: Request, response: Response):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Something went wrong. Please try again later.',
         )
+
+
+@router.post('/register/organizations', dependencies=[Depends(RegisterLimiter())] if is_production() else [])
+async def register_organization(credentials: RegisterRequest):
+    supabase = get_supabase()
+    supabase_admin = get_supabase_admin()
+    try:
+        res = await supabase.auth.sign_up(
+            {
+                'email': credentials.email,
+                'password': credentials.password,
+                'options': {'email_redirect_to': f'{os.getenv("PARTNER_FRONTEND_BASE_URL")}/verify-email'},
+            }
+        )
+    except Exception as e:
+        print(e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Something went wrong. Please try again later.',
+        )
+
+    user_id = res.user.id
+    try:
+        await supabase_admin.auth.admin.update_user_by_id(
+            user_id,
+            {'app_metadata': {'user_type': 'organizations'}},
+        )
+    except Exception as e:
+        print(e)
+        try:
+            await supabase_admin.auth.admin.delete_user(user_id)
+        except Exception as _:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Something went wrong. Please try again later.',
+        )
+
+    return {'detail': 'Partner account registered successfully! Please verify your email before logging in.'}

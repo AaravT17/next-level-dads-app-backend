@@ -23,6 +23,8 @@ from app.config.supabase import init_supabase
 import asyncpg
 from fastapi_limiter import FastAPILimiter
 from app.config.rate_limits import is_production
+from app.routers.organizations import router as organizations_router
+from app.routers.organizations_events import router as organizations_events_router
 
 
 @asynccontextmanager
@@ -57,7 +59,7 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv('FRONTEND_BASE_URL')],
+    allow_origins=[os.getenv('FRONTEND_BASE_URL'), os.getenv('PARTNER_FRONTEND_BASE_URL')],
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
@@ -76,3 +78,5 @@ app.include_router(moderation_router)
 app.include_router(admin_router)
 app.include_router(chats_router)
 app.include_router(ws_router)
+app.include_router(organizations_router)
+app.include_router(organizations_events_router)
