@@ -155,7 +155,7 @@ async def decide_organization_event(
             event_id=UUID(event_id),
             status=decision.status,
             admin_notes=decision.admin_notes,
-            admin_user_id=admin_user,
+            admin_user_id=None, #admin_user,
         )
         res = await conn.fetchrow(query, *params)
 
