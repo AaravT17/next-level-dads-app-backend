@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from app.dependencies.auth import get_consented_user, get_current_user
-from app.models.events import EventResponse, EventCreate, EventCreateResponse
+from app.models.events import EventResponse, EventCreate, EventCreateResponse, EventUpdate, EventUpdateResponse, PartnerEventResponse
 from app.dependencies.db import get_db
 from typing import Literal
 import asyncpg
@@ -136,8 +136,8 @@ async def unregister_from_event(
 async def create_event(
     event: EventCreate, 
     conn: asyncpg.Connection = Depends(get_db),
-    user_id=Depends(get_current_user),
-    ):
+    user_id: str = Depends(get_current_user),
+):
     try:
         async with conn.transaction():
             user_id = UUID(user_id)
@@ -193,3 +193,121 @@ async def create_event(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Failed to create event. Please try again later.',
         )
+
+@router.patch('/{id}', response_model=EventUpdateResponse)
+async def update_event(
+    event_id: UUID,
+    event: EventUpdate,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        user_id = UUID(user_id)
+        # Fetch Organization Id using the current users ID
+        query = """
+            SELECT organization_id 
+            FROM organization_representatives
+            WHERE user_id = $1
+        """
+        organization_id = await conn.fetchval(query, *[user_id])
+
+        if not organization_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User does not administer an organization')
+
+        # Verify the event exist and belongs to the user's organization
+        query = """
+            SELECT *
+            FROM events
+            WHERE id = $1 AND hosted_by_org_id = $2
+        """
+        existing_event = await conn.fetchval(query, event_id, organization_id)
+        if not existing_event:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Event not found"
+            )
+
+        # Create new update model
+        update_data = event.model_dump(exclude_unset=True)
+
+        if not update_data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No fields provided for update"
+            )
+
+        set_clauses = []
+        values = []
+
+        for index, (field, value) in enumerate(update_data.items(), start=1):
+            set_clauses.append(f"{field} = ${index}")
+            values.append(value)
+
+        event_id_param = len(values) + 1
+
+        query = f"""
+            UPDATE events
+            SET {", ".join(set_clauses)}
+            WHERE id = ${event_id_param} AND hosted_by_org_id = ${event_id_param + 1}
+            RETURNING id, name, description, type, starts_at, ends_at, location, latitude, longitude, contact_email, contact_phone, price_cad, created_at, app_status
+        """
+
+        values.append(event_id)
+        values.append(organization_id)
+
+        updated_event = await conn.fetchrow(query, *values)
+
+        # Return new event data to user
+        return EventUpdateResponse(**dict(updated_event))
+
+    except Exception as _:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail='Failed to update event. Please try again later.',
+            )
+
+# TODO: For partners to view their event listings
+# -- FIX: Getting unknown error message 
+# @router.get(
+#     '/my-partner-events',
+#     response_model=list[PartnerEventResponse],
+# )
+# async def get_partner_events(
+#     conn: asyncpg.Connection = Depends(get_db),
+#     user_id = Depends(get_current_user)
+# ):
+#     try:
+#         print(user_id)
+#         # Get user's organization id
+#         query = """
+#             SELECT organization_id 
+#             FROM organization_representatives
+#             WHERE user_id = $1
+#         """
+#         organization_id = await conn.fetchval(query, user_id)
+#         print("Organization id: ", organization_id)
+
+#         if not organization_id:
+#             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User does not administer an organization')
+
+#         # Get event data
+#         query = """
+#             SELECT e.id, e.name, e.description, e.type, e.starts_at, e.ends_at, e.location, e.latitude, e.longitude, e.contact_email, e.contact_phone, e.price_cad, e.created_at, e.app_status, count(ea.user_id) AS attendee_count
+#             FROM events AS e
+#             LEFT JOIN event_attendees AS ea
+#             ON ea.event_id = e.id
+#             WHERE e.hosted_by_org_id = $1
+#             GROUP BY e.id
+#         """
+
+#         res = await conn.fetch(query, organization_id)
+
+#         return [PartnerEventResponse(**dict(r)) for r in res]
+    
+#     except ValueError as e:
+#             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+#     except Exception as _:
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail='Failed to fetch events. Please try again later.',
+#         )
