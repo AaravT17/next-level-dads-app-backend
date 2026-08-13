@@ -28,32 +28,6 @@ async def create_organization_chat(
 # Partner Messaging
 # ============================================================
 
-async def get_organization_chat(
-    conn: asyncpg.Connection,
-    organization_id: UUID,
-) -> ChatResponse:
-    """
-    Retrieve the existing chat associated with an organization.
-    """
-
-    row = await conn.fetchrow(
-        """
-        SELECT id, organization_id, created_at, updated_at
-        FROM organization_chats
-        WHERE organization_id = $1
-        """,
-        organization_id,
-    )
-
-    # if missing → error
-    if not row:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail='Organization chat not found.',
-        )
-
-    return ChatResponse(**dict(row))
-
 # ============================================================
 # Shared Admin + Partner Messaging
 # ============================================================
@@ -394,6 +368,37 @@ async def list_chats(
         )
 
     return chats
+
+async def get_organization_chat(
+    conn: asyncpg.Connection,
+    chat_id: UUID,
+) -> ChatResponse:
+    """
+    Retrieve the existing chat associated with an organization.
+    """
+    row = await conn.fetchrow(
+        """
+        SELECT
+            oc.id,
+            oc.organization_id,
+            o.name AS organization_name,
+            oc.created_at,
+            oc.updated_at
+        FROM organization_chats oc
+        JOIN organizations o
+            ON o.id = oc.organization_id
+        WHERE oc.id = $1
+        """,
+        chat_id,
+    )
+
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Organization chat not found.',
+        )
+
+    return ChatResponse(**dict(row))
 
 async def get_chat_by_organization(
     conn: asyncpg.Connection,
