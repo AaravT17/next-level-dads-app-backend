@@ -150,8 +150,8 @@ async def unregister_from_event(
 async def create_event(
     event: EventCreate,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id=Depends(get_current_user),
-    ):
+    user_id: str = Depends(get_current_user),
+):
     try:
         async with conn.transaction():
             user_id = UUID(user_id)
@@ -292,11 +292,6 @@ async def update_event(
 
 # TODO: For partners to view their event listings
 # -- FIX: Getting unknown error message 
-# @router.get('/my-partner-events')
-# async def get_partner_events():
-#     print("Testing")
-
-
 # @router.get(
 #     '/my-partner-events',
 #     response_model=list[PartnerEventResponse],

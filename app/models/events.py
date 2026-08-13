@@ -222,7 +222,6 @@ class EventUpdateResponse(BaseModel):
         description="Application status"
     )
 
-
 # Response for events on the partner portal
 class PartnerEventResponse(BaseModel):
     id: UUID
