@@ -34,6 +34,7 @@ class OrganizationMessageResponse(BaseModel):
 # ------------------------------------------------------------------
 
 class SendMessageRequest(BaseModel):
+    """Request payload for sending a message in an organization chat."""
     content: str = Field(..., min_length=1, max_length=2000)
 
     # Optional metadata for future event/resource message integration.
@@ -51,6 +52,7 @@ class SendMessageRequest(BaseModel):
         return stripped_content
 
 class MessageResponse(BaseModel):
+    """Organization chat message returned with optional sender display information."""
     id: UUID
     chat_id: UUID
 
@@ -92,10 +94,6 @@ class ChatListItemResponse(BaseModel):
 
     Organization details are populated by joining organization_chats
     with organizations.
-    Admin chat-list row.
-
-    organization_name is obtained by joining organization_chats
-    to organizations.
     """
 
     id: UUID
