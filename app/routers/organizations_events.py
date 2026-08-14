@@ -52,7 +52,7 @@ async def get_my_organization_events(
         org_id = org_row["id"]
 
         events_query = """
-            SELECT id, name, type, app_status, created_at
+            SELECT id, name, description, type, app_status, created_at, location
             FROM events
             WHERE hosted_by_org_id = $1
             ORDER BY created_at DESC
@@ -164,5 +164,4 @@ async def decide_organization_event(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update organization event decision. Please try again later.",
         )
-
 
