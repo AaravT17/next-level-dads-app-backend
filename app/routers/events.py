@@ -126,3 +126,192 @@ async def unregister_from_event(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Failed to unregister from event. Please try again later.',
         )
+
+@router.post(
+    '/event-application',
+    response_model=EventCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_event(
+    event: EventCreate, 
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        async with conn.transaction():
+            user_id = UUID(user_id)
+            # print("user id: ", user_id)
+            # Fetch Organization Id using the current users ID
+            query = """
+                SELECT organization_id 
+                FROM organization_representatives
+                WHERE user_id = $1
+            """
+            organization_id = await conn.fetchval(query, *[user_id])
+            # print("Organization id: ", organization_id)
+
+            if not organization_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User does not administer an organization')
+
+            query = """
+                INSERT INTO events (name, description, type, starts_at, ends_at, location, latitude, longitude, hosted_by_org_id, contact_email, contact_phone, price_cad, created_by, created_at, app_status)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), 'pending')
+                RETURNING id
+            """
+
+            # print("inserting into event table")
+            # Retrieve the ID of the new event row after insertion
+            res = await conn.fetchval(
+                query,
+                event.name, 
+                event.description, 
+                event.type, 
+                event.starts_at, 
+                event.ends_at, 
+                event.location, 
+                event.latitude, 
+                event.longitude, 
+                organization_id, 
+                event.contact_email, 
+                event.contact_phone, 
+                event.price_cad, 
+                user_id
+            )
+
+            # print ("insertion complete, id: ", res)
+
+            if not res:
+                raise Exception('Failed to create event')
+
+            # Return event id to user
+            event_id = res
+            return {'id': event_id}
+        
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to create event. Please try again later.',
+        )
+
+@router.patch('/{id}', response_model=EventUpdateResponse)
+async def update_event(
+    id: str,
+    event: EventUpdate,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_current_user),
+):
+    try:
+        user_id = UUID(user_id)
+        # Fetch Organization Id using the current users ID
+        query = """
+            SELECT organization_id 
+            FROM organization_representatives
+            WHERE user_id = $1
+        """
+        organization_id = await conn.fetchval(query, *[user_id])
+
+        if not organization_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User does not administer an organization')
+
+        # Verify the event exist and belongs to the user's organization
+        query = """
+            SELECT *
+            FROM events
+            WHERE id = $1 AND hosted_by_org_id = $2
+        """
+        existing_event = await conn.fetchval(query, id, organization_id)
+        if not existing_event:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Event not found"
+            )
+
+        # Create new update model
+        update_data = event.model_dump(exclude_unset=True)
+
+        if not update_data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No fields provided for update"
+            )
+
+        set_clauses = []
+        values = []
+
+        for index, (field, value) in enumerate(update_data.items(), start=1):
+            set_clauses.append(f"{field} = ${index}")
+            values.append(value)
+
+        event_id_param = len(values) + 1
+
+        query = f"""
+            UPDATE events
+            SET {", ".join(set_clauses)}
+            WHERE id = ${event_id_param} AND hosted_by_org_id = ${event_id_param + 1}
+            RETURNING id, name, description, type, starts_at, ends_at, location, latitude, longitude, contact_email, contact_phone, price_cad, created_at, app_status
+        """
+
+        values.append(id)
+        values.append(organization_id)
+
+        updated_event = await conn.fetchrow(query, *values)
+
+        # Return new event data to user
+        return EventUpdateResponse(**dict(updated_event))
+
+    except Exception as _:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail='Failed to update event. Please try again later.',
+            )
+
+# TODO: For partners to view their event listings
+# -- FIX: Getting unknown error message 
+# @router.get('/my-partner-events')
+# async def get_partner_events():
+#     print("Testing")
+
+
+# @router.get(
+#     '/my-partner-events',
+#     response_model=list[PartnerEventResponse],
+# )
+# async def get_partner_events(
+#     conn: asyncpg.Connection = Depends(get_db),
+#     user_id = Depends(get_current_user)
+# ):
+#     try:
+#         print(user_id)
+#         # Get user's organization id
+#         query = """
+#             SELECT organization_id 
+#             FROM organization_representatives
+#             WHERE user_id = $1
+#         """
+#         organization_id = await conn.fetchval(query, user_id)
+#         print("Organization id: ", organization_id)
+
+#         if not organization_id:
+#             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User does not administer an organization')
+
+#         # Get event data
+#         query = """
+#             SELECT e.id, e.name, e.description, e.type, e.starts_at, e.ends_at, e.location, e.latitude, e.longitude, e.contact_email, e.contact_phone, e.price_cad, e.created_at, e.app_status, count(ea.user_id) AS attendee_count
+#             FROM events AS e
+#             LEFT JOIN event_attendees AS ea
+#             ON ea.event_id = e.id
+#             WHERE e.hosted_by_org_id = $1
+#             GROUP BY e.id
+#         """
+
+#         res = await conn.fetch(query, organization_id)
+
+#         return [PartnerEventResponse(**dict(r)) for r in res]
+    
+#     except ValueError as e:
+#             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+#     except Exception as _:
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail='Failed to fetch events. Please try again later.',
+#         )
