@@ -18,11 +18,14 @@ async def list_applications(
     limit: int,
     offset: int,
     search: str | None = None,
+    city: str | None = None,
+    province: str | None = None,
 ) -> list[ApplicationRowResponse]:
     """
     Return pending and rejected organization applications for the admin review list.
-    Supports optional status filtering, organization/contact search, pagination,
-    and a preview of the most recent internal note for each application.
+
+    Supports optional status filtering, organization/contact search, region filtering, 
+    pagination, and a preview of the most recent internal note for each application.
     """
     query = """
         SELECT
@@ -53,6 +56,7 @@ async def list_applications(
 
         LEFT JOIN public.users u
             ON u.id = last_note.submitted_by
+
         WHERE o.status IN ('pending', 'rejected')
             AND ($1::text IS NULL OR o.status = $1)
             AND (
@@ -60,6 +64,10 @@ async def list_applications(
                 OR o.name ILIKE '%' || $2 || '%'
                 OR o.contact_name ILIKE '%' || $2 || '%'
             )
+            
+            AND ($3::text IS NULL OR o.city = $3)
+            AND ($4::text IS NULL OR o.province = $4)
+
         -- Show pending applications before rejected applications.
         ORDER BY
             CASE
@@ -67,10 +75,10 @@ async def list_applications(
                 ELSE 1
             END,
             o.created_at DESC
-        LIMIT $3 OFFSET $4
+        LIMIT $5 OFFSET $6
     """
 
-    rows = await conn.fetch(query, status_filter, search, limit, offset)
+    rows = await conn.fetch(query, status_filter, search, city, province, limit, offset)
 
     applications: list[ApplicationRowResponse] = []
 
@@ -106,10 +114,13 @@ conn: asyncpg.Connection,
 limit: int,
 offset: int,
 search: str | None = None,
+city: str | None = None,
+province: str | None = None,
 ) -> list[ActivePartnerResponse]:
     """
     Return approved organizations for the admin active partners list.
-    Supports optional organization/contact search and pagination.
+
+    Supports optional organization/contact search, region filtering, and pagination.
     """
     query = """
             SELECT 
@@ -126,11 +137,13 @@ search: str | None = None,
                     OR o.name ILIKE '%' || $1 || '%'
                     OR o.contact_name ILIKE '%' || $1 || '%'
                 )
+                AND ($2::text IS NULL OR o.city = $2)
+                AND ($3::text IS NULL OR o.province = $3)
             ORDER BY o.approved_at DESC
-            LIMIT $2 OFFSET $3
+            LIMIT $4 OFFSET $5
         """
 
-    rows = await conn.fetch(query, search, limit, offset)
+    rows = await conn.fetch(query, search, city, province, limit, offset)
 
     return [
             ActivePartnerResponse(

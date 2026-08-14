@@ -159,30 +159,27 @@ async def update_my_application(
 async def list_applications(
     status_filter: Literal["pending", "rejected"] | None = Query(None, alias='status'),
     search: str | None = Query(None),
+    city: str | None = Query(None),
+    province: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     conn: asyncpg.Connection = Depends(get_db),
     _admin: str = Depends(get_admin_user)
 ):
-    return await organization_service.list_applications(conn=conn, status_filter=status_filter, search=search, limit=limit, offset=offset)
+    return await organization_service.list_applications(conn=conn, status_filter=status_filter, search=search, city=city, province=province, limit=limit, offset=offset)
 
 @router.get('/active', response_model=list[ActivePartnerResponse])
 async def list_active_partners(
     search: str | None = Query(None),
+    city: str | None = Query(None),
+    province: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     conn: asyncpg.Connection = Depends(get_db),
     _admin: str = Depends(get_admin_user)
 ):
-    return await organization_service.list_active_partners(conn=conn, search=search, limit=limit, offset=offset)
+    return await organization_service.list_active_partners(conn=conn, search=search, city=city, province=province, limit=limit, offset=offset)
 
-@router.get('/{organization_id}', response_model=OrganizationAdminApplicationResponse)
-async def get_organization(
-    organization_id: UUID,
-    conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user)
-):
-    return await organization_service.get_organization(conn=conn, organization_id=organization_id)
 
 # TODO: Move/aggregate organization action items into a shared admin overview endpoint once event/resource action items exist.
 @router.get("/action-items", response_model=list[ActionItemResponse])
@@ -192,6 +189,7 @@ async def list_organization_action_items(
     _admin: str = Depends(get_admin_user),
 ):
     return await organization_service.list_organization_action_items(conn=conn,limit=limit)
+
 
 @router.post('/{organization_id}/notes', response_model=InternalNoteResponse, status_code=status.HTTP_201_CREATED)
 async def add_internal_note(
@@ -210,3 +208,12 @@ async def decide_application(
     _admin: str = Depends(get_admin_user)
 ):
     return await organization_service.decide_application(conn=conn, organization_id=organization_id, decision=payload)
+
+
+@router.get('/{organization_id}', response_model=OrganizationAdminApplicationResponse)
+async def get_organization(
+    organization_id: UUID,
+    conn: asyncpg.Connection = Depends(get_db),
+    _admin: str = Depends(get_admin_user)
+):
+    return await organization_service.get_organization(conn=conn, organization_id=organization_id)
