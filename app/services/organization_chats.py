@@ -236,6 +236,8 @@ async def send_message(
         json.dumps(body.subject) if body.subject is not None else None,
     )
 
+    # Database trigger updates the chat's updated_at timestamp automatically.
+
     row_data = dict(row)
     row_data["subject"] = parse_jsonb_value(row_data.get("subject"), None)
 
@@ -270,6 +272,7 @@ async def list_chats(
             oc.id,
             oc.organization_id,
             o.name AS organization_name,
+            o.status AS organization_status,
             oc.updated_at,
             lm.id AS last_message_id,
             lm.content AS last_message_content,
@@ -353,6 +356,7 @@ async def list_chats(
                 id=row["id"],
                 organization_id=row["organization_id"],
                 organization_name=row["organization_name"],
+                organization_status=row["organization_status"],
                 updated_at=row["updated_at"],
                 last_message=last_message,
             )
@@ -426,13 +430,15 @@ async def get_chat_by_organization(
 # TODO: Add reply-to support with validation.
 
 # TODO: Add message editing support.
-# Validate that the authenticated sender owns the message,
-# update content, and set edited_at.
 
 # TODO: Add soft-delete support for messages.
-# Validate that the authenticated sender owns the message,
-# mark is_deleted = true, and preserve the database record.
 
 # TODO: Add deleted user fallback when sendder_id becomes NULL after the related auth user is deleted.
 
-# TODO: Validate that cursor_created_at and cursor_id are supplied together.
+# TODO: Validate that cursor_created_at and cursor_id are supplied together and add pagination for long running conversations.
+
+# TODO: Add organization chat search/filtering.
+
+# TODO: Add real-time message updates.
+
+# TODO: Add unread conversation indiciators / notifications.

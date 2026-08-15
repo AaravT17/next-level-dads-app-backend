@@ -85,5 +85,6 @@ class ChatListItemResponse(BaseModel):
     id: UUID
     organization_id: UUID
     organization_name: str
+    organization_status: str
     updated_at: datetime
     last_message: LastMessageResponse | None = None
