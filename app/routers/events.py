@@ -133,9 +133,21 @@ async def unregister_from_event(
     '/event-application',
     response_model=EventCreateResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="Create an event",
+    description="""
+        Creates a new event application
+
+        Required fields include name, type, starts_at, location, and price_cad
+        The authenticated user must administer an organization
+    """,
+    responses={
+        201: {"description": "Event created successfully"},
+        404: {"description": "User does not administer an organization"},
+        500: {"description": "Internal server error: failed to create event."}
+    }
 )
 async def create_event(
-    event: EventCreate, 
+    event: EventCreate,
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
@@ -195,9 +207,19 @@ async def create_event(
             detail='Failed to create event. Please try again later.',
         )
 
-@router.patch('/{id}', response_model=EventUpdateResponse)
+@router.patch(
+        '/{id}', 
+        response_model=EventUpdateResponse,
+        summary="Update an event",
+        description="""
+        Updates one or more fields of an event.
+
+        Only the fields present within the response body will be modified.
+        The user must administer the organization that owns the event
+        """
+        )
 async def update_event(
-    event_id: UUID,
+    id: UUID,
     event: EventUpdate,
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_current_user),
@@ -221,7 +243,7 @@ async def update_event(
             FROM events
             WHERE id = $1 AND hosted_by_org_id = $2
         """
-        existing_event = await conn.fetchval(query, event_id, organization_id)
+        existing_event = await conn.fetchval(query, id, organization_id)
         if not existing_event:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -253,7 +275,7 @@ async def update_event(
             RETURNING id, name, description, type, starts_at, ends_at, location, latitude, longitude, contact_email, contact_phone, price_cad, created_at, app_status
         """
 
-        values.append(event_id)
+        values.append(id)
         values.append(organization_id)
 
         updated_event = await conn.fetchrow(query, *values)
