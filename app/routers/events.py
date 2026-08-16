@@ -1,12 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from app.dependencies.auth import get_consented_user
-from app.models.events import EventResponse
+from app.dependencies.auth import get_consented_user, get_current_user
+from app.models.events import EventResponse, EventCreate, EventCreateResponse, EventUpdate, EventUpdateResponse, PartnerEventResponse
 from app.dependencies.db import get_db
 from typing import Literal
 import asyncpg
 from uuid import UUID
 from datetime import datetime
 from app.services.events import build_discover_events_query, build_get_event_by_id_query
+from app.config.rate_limits import CreateEventLimiter
+
+
 
 
 router = APIRouter(
@@ -131,9 +134,21 @@ async def unregister_from_event(
     '/event-application',
     response_model=EventCreateResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="Create an event",
+    description="""
+        Creates a new event application
+
+        Required fields include name, type, starts_at, location, and price_cad
+        The authenticated user must administer an organization
+    """,
+    responses={
+        201: {"description": "Event created successfully"},
+        404: {"description": "User does not administer an organization"},
+        500: {"description": "Internal server error: failed to create event."}
+    }
 )
 async def create_event(
-    event: EventCreate, 
+    event: EventCreate,
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
@@ -193,9 +208,19 @@ async def create_event(
             detail='Failed to create event. Please try again later.',
         )
 
-@router.patch('/{id}', response_model=EventUpdateResponse)
+@router.patch(
+        '/{id}', 
+        response_model=EventUpdateResponse,
+        summary="Update an event",
+        description="""
+        Updates one or more fields of an event.
+
+        Only the fields present within the response body will be modified.
+        The user must administer the organization that owns the event
+        """
+        )
 async def update_event(
-    id: str,
+    id: UUID,
     event: EventUpdate,
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_current_user),
@@ -267,11 +292,6 @@ async def update_event(
 
 # TODO: For partners to view their event listings
 # -- FIX: Getting unknown error message 
-# @router.get('/my-partner-events')
-# async def get_partner_events():
-#     print("Testing")
-
-
 # @router.get(
 #     '/my-partner-events',
 #     response_model=list[PartnerEventResponse],
