@@ -4,7 +4,7 @@ from typing import Optional
 from uuid import UUID
 import asyncpg
 
-from app.dependencies.auth import get_admin_user
+from app.dependencies.auth import get_admin_user, get_current_user
 from app.dependencies.db import get_db
 from app.services.organizations_events import (
     build_get_organization_event_by_id_query,
@@ -23,6 +23,58 @@ router = APIRouter(
     prefix="/api/organizations-events",
     tags=["organizations-events"]
 )
+
+# Partner-Facing 
+
+@router.get("/me")
+async def get_my_organization_events(
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id = Depends(get_current_user),
+    ):
+    """
+    Get all event submissions belonging to the logged-in user's organization,
+    across all statuses (pending, approved, rejected).
+    Partner-facing — not admin only.
+    """
+    try:
+        org_query = """
+            SELECT o.id
+            FROM organizations o
+            JOIN organization_representatives r ON r.organization_id = o.id
+            WHERE r.user_id = $1
+            LIMIT 1
+        """
+        org_row = await conn.fetchrow(org_query, UUID(user_id))
+        if not org_row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No organization found for this user."
+            )
+        org_id = org_row["id"]
+
+        events_query = """
+            SELECT id, name, description, type, app_status, created_at, location
+            FROM events
+            WHERE hosted_by_org_id = $1
+            ORDER BY created_at DESC
+        """
+        rows = await conn.fetch(events_query, org_id)
+        return [dict(row) for row in rows]
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch your organization's events. Please try again later.",
+        )
+
+# Admin Review
 
 @router.get("/")
 async def list_organization_events(
