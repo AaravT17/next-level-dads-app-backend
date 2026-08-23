@@ -10,7 +10,7 @@ from app.common.config.constants import (
     CHAT_ADDABLE_PARTICIPANTS_PAGE_LIMIT,
 )
 from app.common.config.redis import publish
-from app.models.chats import (
+from app.modules.chats.models import (
     ChatResponse,
     LastMessageResponse,
     OtherUserResponse,

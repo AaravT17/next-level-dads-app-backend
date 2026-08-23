@@ -5,7 +5,7 @@ from uuid import UUID
 import asyncpg
 
 from app.common.config.constants import CONVERSATIONS_PAGE_LIMIT, MESSAGES_PAGE_LIMIT, REPLIES_PAGE_LIMIT
-from app.models.communities import (
+from app.modules.communities.models import (
     AuthorInfo,
     ConversationResponse,
     MessageResponse,

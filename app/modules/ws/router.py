@@ -1,9 +1,9 @@
 from fastapi import APIRouter, status, Query, WebSocket, WebSocketDisconnect
-from app.utils.auth import verify_token
+from app.modules.auth.service import verify_token
 from app.common.dependencies.auth import check_consent
 from app.common.ws.connection_manager import connect, disconnect
 from app.common.config.redis import publish
-from app.services.chats import mark_chat_read
+from app.modules.chats.service import mark_chat_read
 import json
 
 

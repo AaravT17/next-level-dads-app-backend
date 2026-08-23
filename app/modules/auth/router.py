@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from supabase_auth.errors import AuthApiError
 from app.common.config.supabase import get_supabase
-from app.models.auth import (
+from app.modules.auth.models import (
     RegisterRequest,
     LoginRequest,
     LoginResponse,
@@ -10,7 +10,7 @@ from app.models.auth import (
 )
 import os
 from app.common.dependencies.auth import get_current_access_token
-from app.utils.auth import set_refresh_cookie, clear_refresh_cookie
+from app.modules.auth.service import set_refresh_cookie, clear_refresh_cookie
 from app.common.dependencies.rate_limiting import (
     RegisterLimiter,
     LoginLimiter,

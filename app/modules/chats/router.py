@@ -5,7 +5,7 @@ from app.common.dependencies.db import get_db
 import asyncpg
 from datetime import datetime
 from uuid import UUID
-from app.models.chats import (
+from app.modules.chats.models import (
     CreateChatRequest,
     ChatResponse,
     MessageResponse,
@@ -17,7 +17,7 @@ from app.models.chats import (
     ChatAddableParticipantResponse,
     UpdateChatNameRequest,
 )
-import app.services.chats as chats_service
+import app.modules.chats.service as chats_service
 
 router = APIRouter(
     prefix='/api/chats',

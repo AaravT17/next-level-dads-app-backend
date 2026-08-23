@@ -25,24 +25,24 @@ from app.common.config.constants import (
     MAX_BIO_LENGTH,
 )
 from app.common.dependencies.auth import get_current_user, get_consented_user
-from app.models.users import MeResponse, UserProfileResponse, UserStatsResponse, UpdatePreferencesRequest
-from app.models.communities import CommunityResponse
-from app.models.events import EventResponse
+from app.modules.users.models import MeResponse, UserProfileResponse, UserStatsResponse, UpdatePreferencesRequest
+from app.modules.communities.models import CommunityResponse
+from app.modules.events.models import EventResponse
 from app.modules.interests.service import normalize_interest
-from app.services.users import (
+from app.modules.users.service import (
     build_get_me_query,
     build_get_user_profile_query,
     build_discover_profiles_query,
     delete_avatar_from_storage,
 )
-from app.utils.users import resolve_connection_status
+from app.modules.connections.service import resolve_connection_status
 from app.common.dependencies.db import get_db
 import asyncpg
 import json
 from datetime import datetime, date
 from uuid import UUID
-from app.services.communities import build_user_communities_query
-from app.services.events import build_user_events_query
+from app.modules.communities.communities import build_user_communities_query
+from app.modules.events.service import build_user_events_query
 
 
 router = APIRouter(prefix='/api/users', tags=['users'])

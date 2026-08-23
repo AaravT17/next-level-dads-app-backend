@@ -8,18 +8,18 @@ from app.common.dependencies.rate_limiting import (
 )
 from typing import Literal
 from app.common.dependencies.auth import get_consented_user
-from app.models.communities import CommunityResponse
-from app.models.users import CommunityMemberResponse
+from app.modules.communities.models import CommunityResponse
+from app.modules.users.models import CommunityMemberResponse
 from app.common.dependencies.db import get_db, get_pool
 from app.modules.moderation.models import ContentType
 from app.modules.moderation.service import assert_not_banned, moderate_content
 import asyncpg
-from app.services.communities import (
+from app.modules.communities.communities import (
     build_discover_communities_query,
     build_get_community_by_id_query,
     build_get_community_members_query,
 )
-from app.models.communities import (
+from app.modules.communities.models import (
     ConversationCreate,
     ConversationResponse,
     MessageCreate,
@@ -28,7 +28,7 @@ from app.models.communities import (
     ReplyCreate,
     ReplyResponse,
 )
-from app.services.communities_service import (
+from app.modules.communities.communities_service import (
     list_conversations,
     get_conversation,
     list_messages,

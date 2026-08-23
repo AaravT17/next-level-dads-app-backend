@@ -3,18 +3,18 @@ from app.common.dependencies.rate_limiting import SendConnectionRequestLimiter, 
 from app.common.dependencies.auth import get_consented_user
 from app.common.dependencies.db import get_db
 import asyncpg
-from app.services.connections import (
+from app.modules.connections.service import (
     build_connected_query,
     build_requests_query,
     build_requested_query,
+    resolve_connection_status,
 )
 from uuid import UUID
 from datetime import datetime
-from app.models.connections import (
+from app.modules.connections.models import (
     ConnectionProfileResponse,
     ConnectionStatusResponse,
 )
-from app.utils.users import resolve_connection_status
 
 
 router = APIRouter(
