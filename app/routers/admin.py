@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.common.dependencies.auth import get_admin_user
 from app.common.dependencies.db import get_db
-from app.moderation.models import (
+from app.modules.moderation.models import (
     AdminBanCreate,
     AdminBanItem,
     AdminContentReportItem,
@@ -17,8 +17,8 @@ from app.moderation.models import (
     ModerationLayer,
     NotificationType,
 )
-from app.moderation.messages import build_ban_message, build_moderator_removal_message
-from app.moderation.repository import (
+from app.modules.moderation.messages import build_ban_message, build_moderator_removal_message
+from app.modules.moderation.repository import (
     get_content_context_admin,
     get_content_for_moderator_action,
     get_content_report_for_action,

@@ -28,7 +28,7 @@ from app.common.dependencies.auth import get_current_user, get_consented_user
 from app.models.users import MeResponse, UserProfileResponse, UserStatsResponse, UpdatePreferencesRequest
 from app.models.communities import CommunityResponse
 from app.models.events import EventResponse
-from app.utils.interests import normalize_interest
+from app.modules.interests.service import normalize_interest
 from app.services.users import (
     build_get_me_query,
     build_get_user_profile_query,

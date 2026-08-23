@@ -11,8 +11,8 @@ from app.common.dependencies.auth import get_consented_user
 from app.models.communities import CommunityResponse
 from app.models.users import CommunityMemberResponse
 from app.common.dependencies.db import get_db, get_pool
-from app.moderation.models import ContentType
-from app.moderation.service import assert_not_banned, moderate_content
+from app.modules.moderation.models import ContentType
+from app.modules.moderation.service import assert_not_banned, moderate_content
 import asyncpg
 from app.services.communities import (
     build_discover_communities_query,
