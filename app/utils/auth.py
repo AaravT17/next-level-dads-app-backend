@@ -1,9 +1,9 @@
 import re
-from app.config.constants import MIN_PASSWORD_LENGTH, PASSWORD_SPECIAL_CHARACTERS
+from app.common.config.constants import MIN_PASSWORD_LENGTH, PASSWORD_SPECIAL_CHARACTERS
 import os
 from fastapi import Response
-from app.config.constants import REFRESH_TOKEN_EXPIRY_DAYS
-from app.config.supabase import get_supabase
+from app.common.config.constants import REFRESH_TOKEN_EXPIRY_DAYS
+from app.common.config.supabase import get_supabase
 
 
 def validate_password_strength(pwd: str) -> str:

@@ -1,5 +1,5 @@
 from fastapi import WebSocket
-from app.ws.pubsub import get_pubsub
+from app.common.config.pubsub import get_pubsub
 import json
 import asyncio
 
@@ -45,9 +45,11 @@ async def handle_event(msg: dict):
         # capture a snapshot of active connections for the user, prevents runtime errors
         # in case it changes mid-loop while we're broadcasting
         user_ws = list(user_ws_dict.values())
-        for ws in user_ws:
+
+        async def _safe_send(ws):
             try:
                 await ws.send_json(data['event_data'])
-            except Exception as _:
-                # an error may occur if an event arrives between WebSocket closure and disconnect being called
+            except Exception:
                 pass
+
+        await asyncio.gather(*[_safe_send(ws) for ws in user_ws])

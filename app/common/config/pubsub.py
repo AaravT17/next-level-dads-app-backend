@@ -1,4 +1,4 @@
-from app.config.redis import get_redis
+from app.common.config.redis import get_redis
 from redis.asyncio.client import PubSub
 import asyncio
 

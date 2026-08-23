@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, status, Query, Request, Response
-from app.config.rate_limits import CreateChatLimiter, SendChatMessageLimiter, is_production
-from app.dependencies.auth import get_consented_user
-from app.dependencies.db import get_db
+from app.common.dependencies.rate_limiting import CreateChatLimiter, SendChatMessageLimiter, is_production
+from app.common.dependencies.auth import get_consented_user
+from app.common.dependencies.db import get_db
 import asyncpg
 from datetime import datetime
 from uuid import UUID

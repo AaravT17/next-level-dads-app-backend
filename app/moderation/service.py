@@ -11,7 +11,7 @@ from uuid import UUID
 import asyncpg
 from fastapi import HTTPException, status
 
-from app.config.constants import (
+from app.common.config.constants import (
     MODERATION_BAN_DURATION_HOURS,
     MODERATION_BAN_THRESHOLD,
     MODERATION_BAN_WINDOW_HOURS,

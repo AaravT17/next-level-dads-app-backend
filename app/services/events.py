@@ -1,6 +1,6 @@
 from uuid import UUID
 from datetime import datetime
-from app.config.constants import EVENTS_PAGE_LIMIT
+from app.common.config.constants import EVENTS_PAGE_LIMIT
 from typing import Literal
 
 

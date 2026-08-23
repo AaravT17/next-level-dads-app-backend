@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from uuid import UUID
-from app.config.constants import MAX_NAME_LENGTH, MAX_CITY_LENGTH, MAX_BIO_LENGTH
+from app.common.config.constants import MAX_NAME_LENGTH, MAX_CITY_LENGTH, MAX_BIO_LENGTH
 from typing import Literal
 from datetime import datetime, date
 

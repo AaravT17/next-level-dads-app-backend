@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
-from app.config.constants import (
+from app.common.config.constants import (
     COMMUNITY_NAME_MAX_LENGTH,
     COMMUNITY_DESCRIPTION_MAX_LENGTH,
     CONVERSATION_TITLE_MIN_LENGTH,

@@ -1,6 +1,6 @@
 from datetime import datetime
 from uuid import UUID
-from app.config.constants import COMMUNITIES_PAGE_LIMIT, PROFILES_PAGE_LIMIT
+from app.common.config.constants import COMMUNITIES_PAGE_LIMIT, PROFILES_PAGE_LIMIT
 
 
 def build_discover_communities_query(

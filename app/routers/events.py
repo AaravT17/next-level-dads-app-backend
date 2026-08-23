@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from app.dependencies.auth import get_consented_user
+from app.common.dependencies.auth import get_consented_user
 from app.models.events import EventResponse
-from app.dependencies.db import get_db
+from app.common.dependencies.db import get_db
 from typing import Literal
 import asyncpg
 from uuid import UUID

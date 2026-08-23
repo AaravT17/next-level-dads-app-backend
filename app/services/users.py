@@ -1,5 +1,5 @@
-from app.config.supabase import get_supabase_admin
-from app.config.constants import AGE_RANGES, PROFILES_PAGE_LIMIT
+from app.common.config.supabase import get_supabase_admin
+from app.common.config.constants import AGE_RANGES, PROFILES_PAGE_LIMIT
 from datetime import datetime
 from uuid import UUID
 

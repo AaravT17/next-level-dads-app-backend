@@ -3,13 +3,13 @@ import asyncio
 from datetime import datetime
 from uuid import UUID
 from fastapi import status, HTTPException
-from app.config.constants import (
+from app.common.config.constants import (
     CHAT_PREVIEWS_PAGE_LIMIT,
     CHAT_MESSAGES_PAGE_LIMIT,
     CHAT_PARTICIPANTS_PAGE_LIMIT,
     CHAT_ADDABLE_PARTICIPANTS_PAGE_LIMIT,
 )
-from app.config.redis import publish
+from app.common.config.redis import publish
 from app.models.chats import (
     ChatResponse,
     LastMessageResponse,
@@ -442,12 +442,13 @@ async def _publish_event(
     type: str,
     payload: dict,
 ) -> None:
-    for uid in publish_to:
+    async def _safe_publish(uid):
         try:
             await publish(str(uid), {'user_id': str(uid), 'event_data': {'type': type, 'payload': payload}})
-        except Exception as _:
-            # add proper logging here
+        except Exception:
             pass
+
+    await asyncio.gather(*[_safe_publish(uid) for uid in publish_to])
 
 
 async def edit_message(

@@ -2,10 +2,10 @@ from uuid import UUID
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
-from app.config.rate_limits import ReportContentLimiter, ReportUserLimiter, is_production
+from app.common.dependencies.rate_limiting import ReportContentLimiter, ReportUserLimiter, is_production
 
-from app.dependencies.auth import get_consented_user
-from app.dependencies.db import get_db
+from app.common.dependencies.auth import get_consented_user
+from app.common.dependencies.db import get_db
 from app.moderation.models import (
     BanStatusResponse,
     NotificationResponse,

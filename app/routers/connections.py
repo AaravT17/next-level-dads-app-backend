@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
-from app.config.rate_limits import SendConnectionRequestLimiter, is_production
-from app.dependencies.auth import get_consented_user
-from app.dependencies.db import get_db
+from app.common.dependencies.rate_limiting import SendConnectionRequestLimiter, is_production
+from app.common.dependencies.auth import get_consented_user
+from app.common.dependencies.db import get_db
 import asyncpg
 from app.services.connections import (
     build_connected_query,

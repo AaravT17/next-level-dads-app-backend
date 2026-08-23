@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.config.constants import MODERATION_REPORT_REASON_MAX_LENGTH
+from app.common.config.constants import MODERATION_REPORT_REASON_MAX_LENGTH
 
 
 class ContentType(str, Enum):

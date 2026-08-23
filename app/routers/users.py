@@ -10,21 +10,21 @@ from fastapi import (
     status,
     Request,
 )
-from app.config.rate_limits import (
+from app.common.dependencies.rate_limiting import (
     CreateProfileLimiter,
     DiscoverProfilesLimiter,
     UpdateAvatarLimiter,
     UpdateProfileLimiter,
     is_production,
 )
-from app.config.supabase import get_supabase_admin
-from app.config.constants import (
+from app.common.config.supabase import get_supabase_admin
+from app.common.config.constants import (
     IMAGE_MIME_TO_EXT,
     MAX_NAME_LENGTH,
     MAX_CITY_LENGTH,
     MAX_BIO_LENGTH,
 )
-from app.dependencies.auth import get_current_user, get_consented_user
+from app.common.dependencies.auth import get_current_user, get_consented_user
 from app.models.users import MeResponse, UserProfileResponse, UserStatsResponse, UpdatePreferencesRequest
 from app.models.communities import CommunityResponse
 from app.models.events import EventResponse
@@ -36,7 +36,7 @@ from app.services.users import (
     delete_avatar_from_storage,
 )
 from app.utils.users import resolve_connection_status
-from app.dependencies.db import get_db
+from app.common.dependencies.db import get_db
 import asyncpg
 import json
 from datetime import datetime, date

@@ -4,8 +4,8 @@ from uuid import UUID
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.dependencies.auth import get_admin_user
-from app.dependencies.db import get_db
+from app.common.dependencies.auth import get_admin_user
+from app.common.dependencies.db import get_db
 from app.moderation.models import (
     AdminBanCreate,
     AdminBanItem,

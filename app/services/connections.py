@@ -1,6 +1,6 @@
 from datetime import datetime
 from uuid import UUID
-from app.config.constants import (
+from app.common.config.constants import (
     PROFILES_PAGE_LIMIT,
 )
 

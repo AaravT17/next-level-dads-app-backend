@@ -4,7 +4,7 @@ from fastapi import HTTPException, status
 from uuid import UUID
 import asyncpg
 
-from app.config.constants import CONVERSATIONS_PAGE_LIMIT, MESSAGES_PAGE_LIMIT, REPLIES_PAGE_LIMIT
+from app.common.config.constants import CONVERSATIONS_PAGE_LIMIT, MESSAGES_PAGE_LIMIT, REPLIES_PAGE_LIMIT
 from app.models.communities import (
     AuthorInfo,
     ConversationResponse,

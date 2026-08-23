@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from uuid import UUID
 from datetime import datetime
 from typing import Literal
-from app.config.constants import MAX_NAME_LENGTH
+from app.common.config.constants import MAX_NAME_LENGTH
 
 
 class LastMessageResponse(BaseModel):

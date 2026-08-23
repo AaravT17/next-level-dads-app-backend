@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
 from typing import Literal
-from app.config.constants import MAX_BIO_LENGTH
+from app.common.config.constants import MAX_BIO_LENGTH
 
 
 class ConnectionProfileResponse(BaseModel):

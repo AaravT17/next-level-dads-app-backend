@@ -14,15 +14,15 @@ from app.routers.moderation import router as moderation_router
 from app.routers.admin import router as admin_router
 from app.routers.chats import router as chats_router
 from app.routers.ws import router as ws_router
-from app.config.redis import init_redis, close_redis, get_redis
-from app.ws.pubsub import init_pubsub, close_pubsub
+from app.common.config.redis import init_redis, close_redis, get_redis
+from app.common.config.pubsub import init_pubsub, close_pubsub
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from contextlib import asynccontextmanager
-from app.config.supabase import init_supabase
+from app.common.config.supabase import init_supabase
 import asyncpg
 from fastapi_limiter import FastAPILimiter
-from app.config.rate_limits import is_production
+from app.common.dependencies.rate_limiting import is_production
 
 
 @asynccontextmanager

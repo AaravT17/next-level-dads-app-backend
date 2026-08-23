@@ -1,10 +1,9 @@
 from fastapi import Depends, HTTPException, Request, status
 from supabase_auth.errors import AuthApiError
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from app.config.supabase import get_supabase
+from app.common.config.supabase import get_supabase
 import asyncpg
-from app.dependencies.db import get_db
-from app.utils.auth import check_consent
+from app.common.dependencies.db import get_db
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -38,6 +37,18 @@ async def get_current_user(request: Request, token: str = Depends(get_current_ac
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Something went wrong. Please try again later.',
         )
+
+
+async def check_consent(conn: asyncpg.Connection, user_id: str) -> bool:
+    return await conn.fetchval(
+        """
+        SELECT
+            EXISTS (SELECT 1 FROM user_legal_acceptances WHERE user_id = $1 AND document_type = 'terms')
+            AND
+            EXISTS (SELECT 1 FROM user_legal_acceptances WHERE user_id = $1 AND document_type = 'privacy_policy')
+        """,
+        user_id,
+    )
 
 
 async def get_consented_user(
