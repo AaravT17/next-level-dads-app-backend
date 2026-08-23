@@ -13,7 +13,7 @@ async def init_pubsub():
     try:
         pubsub_client = redis_client.pubsub(ignore_subscribe_messages=True)
         pubsub_task = asyncio.create_task(pubsub_client.run())
-    except Exception as _:
+    except Exception:
         raise RuntimeError('Failed to initialize Pub/Sub')
 
 
@@ -28,13 +28,11 @@ async def close_pubsub():
     if pubsub_client:
         try:
             await pubsub_client.unsubscribe()
-        except Exception as _:
-            # add proper logging here
+        except Exception:
             pass
         try:
             await pubsub_client.aclose()
-        except Exception as _:
-            # add proper logging here
+        except Exception:
             pass
         pubsub_client = None
     if pubsub_task:

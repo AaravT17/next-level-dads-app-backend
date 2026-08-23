@@ -25,7 +25,7 @@ async def disconnect(user_id: str, connection_id: str):
 
         active_connections[user_id].pop(connection_id, None)
         if active_connections[user_id] == {}:
-            # no active connections left for the user, remove entry from active_connections and unsubscribe from channel
+            # no active connections left for the user, remove entry from active_connections + unsubscribe from channel
             active_connections.pop(user_id, None)
             await get_pubsub().unsubscribe(f'messages:{user_id}')
 
@@ -36,20 +36,21 @@ async def handle_event(msg: dict):
     try:
         data = json.loads(msg['data'])  # data contains the actual payload we published
     except json.JSONDecodeError:
-        # failed to decode event
         return
 
     # broadcast the event to all active connections for the user
     user_ws_dict = active_connections.get(data['user_id'])
     if user_ws_dict:
-        # capture a snapshot of active connections for the user, prevents runtime errors
-        # in case it changes mid-loop while we're broadcasting
+        # capture a snapshot of active connections for the user, prevents runtime errors in case it changes mid-loop
         user_ws = list(user_ws_dict.values())
+        event_data = data['event_data']
+        await asyncio.gather(*[_send_event(ws, event_data) for ws in user_ws])
 
-        async def _safe_send(ws):
-            try:
-                await ws.send_json(data['event_data'])
-            except Exception:
-                pass
 
-        await asyncio.gather(*[_safe_send(ws) for ws in user_ws])
+async def _send_event(ws: WebSocket, event_data: dict):
+    """Send event data over a WebSocket connection. Catches any exceptions that occur."""
+    try:
+        await ws.send_json(event_data)
+    except Exception:
+        # TODO: Log the exception
+        pass
