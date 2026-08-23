@@ -11,12 +11,14 @@ bearer_scheme = HTTPBearer(auto_error=False)
 def get_current_access_token(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ):
+    """Return the access token from the Authorization header."""
     if not credentials:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Missing access token.')
     return credentials.credentials
 
 
 async def get_current_user(request: Request, token: str = Depends(get_current_access_token)):
+    """Return the user_id from the access token."""
     supabase = get_supabase()
     try:
         res = await supabase.auth.get_user(token)
@@ -37,18 +39,6 @@ async def get_current_user(request: Request, token: str = Depends(get_current_ac
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Something went wrong. Please try again later.',
         )
-
-
-async def check_consent(conn: asyncpg.Connection, user_id: str) -> bool:
-    return await conn.fetchval(
-        """
-        SELECT
-            EXISTS (SELECT 1 FROM user_legal_acceptances WHERE user_id = $1 AND document_type = 'terms')
-            AND
-            EXISTS (SELECT 1 FROM user_legal_acceptances WHERE user_id = $1 AND document_type = 'privacy_policy')
-        """,
-        user_id,
-    )
 
 
 async def get_consented_user(
@@ -80,3 +70,16 @@ async def get_admin_user(
             detail='Admin access required.',
         )
     return user_id
+
+
+async def check_consent(conn: asyncpg.Connection, user_id: str) -> bool:
+    """Check if the user has accepted both the T&C and Privacy Policy."""
+    return await conn.fetchval(
+        """
+        SELECT
+            EXISTS (SELECT 1 FROM user_legal_acceptances WHERE user_id = $1 AND document_type = 'terms')
+            AND
+            EXISTS (SELECT 1 FROM user_legal_acceptances WHERE user_id = $1 AND document_type = 'privacy_policy')
+        """,
+        user_id,
+    )

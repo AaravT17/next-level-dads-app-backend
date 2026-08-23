@@ -3,7 +3,9 @@ from fastapi import HTTPException, Request, status
 from fastapi_limiter.depends import RateLimiter
 
 
+# --- Helper functions ---
 async def ip_key(request: Request) -> str:
+    """Return the IP address of the client making the request."""
     forwarded_for = request.headers.get('X-Forwarded-For')
     if forwarded_for:
         return forwarded_for.split(',')[0].strip()
@@ -11,6 +13,7 @@ async def ip_key(request: Request) -> str:
 
 
 async def user_id_key(request: Request) -> str:
+    """Return the user_id of the user making the request, or the IP address if the user_id is not available."""
     user_id = getattr(request.state, 'user_id', None)
     if user_id:
         return str(user_id)
@@ -19,6 +22,7 @@ async def user_id_key(request: Request) -> str:
 
 
 async def rate_limit_exceeded_callback(*__args):
+    """Raise an HTTPException with status code 429 (Too Many Requests) when the rate limit is exceeded."""
     raise HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail='Too many requests. Please try again later.',
@@ -29,9 +33,11 @@ def is_production() -> bool:
     return os.getenv('ENV') == 'production'
 
 
-# ── Auth (IP-keyed) ────────────────────────────────────────────────────────────
+# --- Rate limiters ---
+# Auth endpoints are rate limited by IP address, while other endpoints are rate limited by user_id
 
 
+# --- Auth ---
 def RegisterLimiter():
     return RateLimiter(times=5, hours=1, identifier=ip_key, callback=rate_limit_exceeded_callback)
 
@@ -48,9 +54,7 @@ def OAuthSessionLimiter():
     return RateLimiter(times=10, minutes=15, identifier=ip_key, callback=rate_limit_exceeded_callback)
 
 
-# ── Users (user_id-keyed) ──────────────────────────────────────────────────────
-
-
+# --- Users ---
 def CreateProfileLimiter():
     return RateLimiter(times=5, hours=1, identifier=user_id_key, callback=rate_limit_exceeded_callback)
 
@@ -67,9 +71,7 @@ def UpdateProfileLimiter():
     return RateLimiter(times=20, hours=1, identifier=user_id_key, callback=rate_limit_exceeded_callback)
 
 
-# ── Communities (user_id-keyed) ────────────────────────────────────────────────
-
-
+# --- Communities ---
 def CreateCommunityLimiter():
     return RateLimiter(times=20, hours=1, identifier=user_id_key, callback=rate_limit_exceeded_callback)
 
@@ -86,9 +88,7 @@ def PostReplyLimiter():
     return RateLimiter(times=60, minutes=1, identifier=user_id_key, callback=rate_limit_exceeded_callback)
 
 
-# ── Chats (user_id-keyed) ──────────────────────────────────────────────────────
-
-
+# --- Chats ---
 def CreateChatLimiter():
     return RateLimiter(times=10, minutes=1, identifier=user_id_key, callback=rate_limit_exceeded_callback)
 
@@ -97,16 +97,12 @@ def SendChatMessageLimiter():
     return RateLimiter(times=60, minutes=1, identifier=user_id_key, callback=rate_limit_exceeded_callback)
 
 
-# ── Connections (user_id-keyed) ────────────────────────────────────────────────
-
-
+# --- Connections ---
 def SendConnectionRequestLimiter():
     return RateLimiter(times=50, hours=1, identifier=user_id_key, callback=rate_limit_exceeded_callback)
 
 
-# ── Moderation (user_id-keyed) ─────────────────────────────────────────────────
-
-
+# --- Moderation ---
 def ReportContentLimiter():
     return RateLimiter(times=20, hours=1, identifier=user_id_key, callback=rate_limit_exceeded_callback)
 
