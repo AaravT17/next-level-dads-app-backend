@@ -1,14 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
-from app.common.dependencies.rate_limiting import SendConnectionRequestLimiter, is_production
+from fastapi import APIRouter, Depends, status, Query, Request, Response
+from app.common.config.constants import IS_PRODUCTION
+from app.common.dependencies.rate_limiting import SendConnectionRequestLimiter
 from app.common.dependencies.auth import get_consented_user
 from app.common.dependencies.db import get_db
 import asyncpg
-from app.modules.connections.service import (
-    build_connected_query,
-    build_requests_query,
-    build_requested_query,
-    resolve_connection_status,
-)
+import app.modules.connections.service as connections_service
 from uuid import UUID
 from datetime import datetime
 from app.modules.connections.models import (
@@ -24,87 +20,36 @@ router = APIRouter(
 
 
 @router.get('/connected', response_model=list[ConnectionProfileResponse])
-async def get_connected(
+async def get_connections(
     name: str | None = Query(None),
     cursor_id: UUID | None = Query(None),
     cursor_updated_at: datetime | None = Query(None),
     user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    try:
-        query, params = build_connected_query(
-            user_id=UUID(user_id),
-            name=name,
-            cursor_id=cursor_id,
-            cursor_updated_at=cursor_updated_at,
-        )
-        res = await conn.fetch(query, *params)
-        return [ConnectionProfileResponse(**dict(r)) for r in res]
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to fetch connections. Please try again later.',
-        )
+    return await connections_service.get_connections(conn, user_id, name, cursor_id, cursor_updated_at)
 
 
 @router.get('/requests', response_model=list[ConnectionProfileResponse])
-async def get_requests(
+async def get_incoming_requests(
     name: str | None = Query(None),
     cursor_id: UUID | None = Query(None),
     cursor_updated_at: datetime | None = Query(None),
     user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    try:
-        query, params = build_requests_query(
-            user_id=UUID(user_id),
-            name=name,
-            cursor_id=cursor_id,
-            cursor_updated_at=cursor_updated_at,
-        )
-        res = await conn.fetch(query, *params)
-        return [ConnectionProfileResponse(**dict(r)) for r in res]
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to fetch connection requests. Please try again later.',
-        )
+    return await connections_service.get_incoming_requests(conn, user_id, name, cursor_id, cursor_updated_at)
 
 
 @router.get('/requested', response_model=list[ConnectionProfileResponse])
-async def get_requested(
+async def get_outgoing_requests(
     name: str | None = Query(None),
     cursor_id: UUID | None = Query(None),
     cursor_updated_at: datetime | None = Query(None),
     user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    try:
-        query, params = build_requested_query(
-            user_id=UUID(user_id),
-            name=name,
-            cursor_id=cursor_id,
-            cursor_updated_at=cursor_updated_at,
-        )
-        res = await conn.fetch(query, *params)
-        return [ConnectionProfileResponse(**dict(r)) for r in res]
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to fetch requested connections. Please try again later.',
-        )
+    return await connections_service.get_outgoing_requests(conn, user_id, name, cursor_id, cursor_updated_at)
 
 
 @router.post(
@@ -112,7 +57,7 @@ async def get_requested(
     response_model=ConnectionStatusResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(get_consented_user), Depends(SendConnectionRequestLimiter())]
-    if is_production()
+    if IS_PRODUCTION
     else [Depends(get_consented_user)],
 )
 async def send_connection_request(
@@ -121,57 +66,10 @@ async def send_connection_request(
     response: Response,
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    try:
-        user_id, curr_user_id = UUID(user_id), UUID(request.state.user_id)
-        query = """
-            INSERT INTO connections (requesting_id, requested_id, status)
-            VALUES ($1, $2, 'pending')
-            ON CONFLICT DO NOTHING
-            RETURNING requesting_id, status
-        """
-        res = await conn.fetchrow(query, *[curr_user_id, user_id])
-        if not res:
-            # fetch existing connection
-            query = """
-                SELECT requesting_id, status
-                FROM connections
-                WHERE (requesting_id = $1 AND requested_id = $2) OR (requesting_id = $2 AND requested_id = $1)
-            """
-            res = await conn.fetchrow(query, *[curr_user_id, user_id])
-            if not res:
-                # this should never happen
-                raise Exception(
-                    'Connection already exists (conflict occurred) but failed to fetch the existing connection.'
-                )
-            response.status_code = status.HTTP_409_CONFLICT
-            return {
-                'connection_status': resolve_connection_status(
-                    user_id=curr_user_id,
-                    requesting_id=res['requesting_id'],
-                    status=res['status'],
-                )
-            }
-        else:
-            return {
-                'connection_status': resolve_connection_status(
-                    user_id=curr_user_id,
-                    requesting_id=res['requesting_id'],
-                    status=res['status'],
-                )
-            }
-    except HTTPException as _:
-        raise
-    except asyncpg.exceptions.CheckViolationError as _:
-        # user tried to send a connection request to themselves
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail='You cannot send a connection request to yourself.',
-        )
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to send connection request. Please try again later.',
-        )
+    result, created = await connections_service.send_connection_request(conn, request.state.user_id, user_id)
+    if not created:
+        response.status_code = status.HTTP_409_CONFLICT
+    return result
 
 
 @router.patch('/{user_id}', status_code=status.HTTP_204_NO_CONTENT)
@@ -180,28 +78,7 @@ async def accept_connection_request(
     curr_user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    try:
-        user_id, curr_user_id = UUID(user_id), UUID(curr_user_id)
-        query = """
-            UPDATE connections
-            SET status = 'accepted', updated_at = NOW()
-            WHERE requesting_id = $1 AND requested_id = $2
-            RETURNING requesting_id, status
-        """
-        res = await conn.fetchrow(query, *[user_id, curr_user_id])
-        if not res:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail='No pending connection request found from this user.',
-            )
-        return
-    except HTTPException as _:
-        raise
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to accept connection request. Please try again later.',
-        )
+    await connections_service.accept_connection_request(conn, user_id, curr_user_id)
 
 
 @router.delete('/{user_id}', status_code=status.HTTP_204_NO_CONTENT)
@@ -210,26 +87,4 @@ async def remove_connection(
     curr_user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    try:
-        user_id, curr_user_id = UUID(user_id), UUID(curr_user_id)
-        query = """
-            WITH remove_connection AS (
-                DELETE FROM connections
-                WHERE (requesting_id = $1 AND requested_id = $2) OR (requesting_id = $2 AND requested_id = $1)
-            )
-            DELETE FROM chats
-            WHERE type = 'dm'
-            AND (
-                (dm_user_1 = $1 AND dm_user_2 = $2) OR
-                (dm_user_1 = $2 AND dm_user_2 = $1)
-            )
-        """
-        await conn.execute(query, *[curr_user_id, user_id])
-        return
-    except HTTPException as _:
-        raise
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to remove connection. Please try again later.',
-        )
+    await connections_service.remove_connection(conn, curr_user_id, user_id)

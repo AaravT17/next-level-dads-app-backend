@@ -147,6 +147,7 @@ async def create_chat(
     user_id: UUID,
     body: CreateChatRequest,
 ) -> dict:
+    # TODO: There is a race condition between us validating that the user is connected with the participants and inserting the chat. If a connection is removed between these two steps, the chat will be created with a participant that the user is no longer connected with. This is an edge case, but we should fix it in the future by using a transaction with a read-lock (FOR SHARE) on the connections rows to prevent them from being deleted while we are creating the chat. This will prevent a DM chat from persisting after the connection is removed.
     name, participant_ids = body.name, body.participant_ids
 
     # validate participant IDs: must be connected with current user (implicitly checks existence and excludes self)

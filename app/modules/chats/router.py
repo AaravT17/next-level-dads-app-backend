@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, status, Query, Request, Response
-from app.common.dependencies.rate_limiting import CreateChatLimiter, SendChatMessageLimiter, is_production
+from app.common.config.constants import IS_PRODUCTION
+from app.common.dependencies.rate_limiting import CreateChatLimiter, SendChatMessageLimiter
 from app.common.dependencies.auth import get_consented_user
 from app.common.dependencies.db import get_db
 import asyncpg
@@ -39,7 +40,7 @@ async def get_chat_previews(
 @router.post(
     '/',
     dependencies=[Depends(get_consented_user), Depends(CreateChatLimiter())]
-    if is_production()
+    if IS_PRODUCTION
     else [Depends(get_consented_user)],
 )
 async def create_chat(
@@ -88,7 +89,7 @@ async def get_chat_messages(
     response_model=MessageResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(get_consented_user), Depends(SendChatMessageLimiter())]
-    if is_production()
+    if IS_PRODUCTION
     else [Depends(get_consented_user)],
 )
 async def send_message(

@@ -1,10 +1,10 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Query, Body, Request
+from app.common.config.constants import IS_PRODUCTION
 from app.common.dependencies.rate_limiting import (
     CreateCommunityLimiter,
     CreateConversationLimiter,
     PostMessageLimiter,
     PostReplyLimiter,
-    is_production,
 )
 from typing import Literal
 from app.common.dependencies.auth import get_consented_user
@@ -95,7 +95,7 @@ async def get_communities(
     '/',
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(get_consented_user), Depends(CreateCommunityLimiter())]
-    if is_production()
+    if IS_PRODUCTION
     else [Depends(get_consented_user)],
 )
 async def create_community(
@@ -272,7 +272,7 @@ async def get_community_conversations(
     response_model=ConversationResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(get_consented_user), Depends(CreateConversationLimiter())]
-    if is_production()
+    if IS_PRODUCTION
     else [Depends(get_consented_user)],
 )
 async def create_conversation(
@@ -394,7 +394,7 @@ async def get_conversation_messages(
     response_model=MessageResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(get_consented_user), Depends(PostMessageLimiter())]
-    if is_production()
+    if IS_PRODUCTION
     else [Depends(get_consented_user)],
 )
 async def create_message(
@@ -590,7 +590,7 @@ async def get_message_replies(
     response_model=ReplyResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(get_consented_user), Depends(PostReplyLimiter())]
-    if is_production()
+    if IS_PRODUCTION
     else [Depends(get_consented_user)],
 )
 async def create_reply(
