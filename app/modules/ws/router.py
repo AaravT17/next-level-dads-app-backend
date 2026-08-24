@@ -14,7 +14,7 @@ router = APIRouter(
 
 
 @router.websocket('/')
-async def chat_websocket(ws: WebSocket, token: str = Query(...), connection_id: str = Query(...)):
+async def chat_websocket(ws: WebSocket, token: str = Query(..., min_length=1), connection_id: str = Query(...)):
     user_id = await verify_token(token)
     if not user_id:
         await ws.close(code=status.WS_1008_POLICY_VIOLATION)

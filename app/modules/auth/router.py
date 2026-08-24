@@ -1,6 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from supabase_auth.errors import AuthApiError
-from app.common.config.supabase import get_supabase
 from app.modules.auth.models import (
     RegisterRequest,
     LoginRequest,
@@ -8,126 +6,54 @@ from app.modules.auth.models import (
     RefreshResponse,
     OAuthSessionRequest,
 )
-import os
 from app.common.dependencies.auth import get_current_access_token
-from app.modules.auth.service import set_refresh_cookie, clear_refresh_cookie
+import app.modules.auth.service as auth_service
+from app.common.config.constants import IS_PRODUCTION
 from app.common.dependencies.rate_limiting import (
     RegisterLimiter,
     LoginLimiter,
     RefreshLimiter,
     OAuthSessionLimiter,
-    is_production,
 )
 
 
 router = APIRouter(prefix='/api/auth', tags=['auth'])
 
 
-@router.post('/register', dependencies=[Depends(RegisterLimiter())] if is_production() else [])
+@router.post('/register', dependencies=[Depends(RegisterLimiter())] if IS_PRODUCTION else [])
 async def register_user(credentials: RegisterRequest):
-    supabase = get_supabase()
-    try:
-        await supabase.auth.sign_up(
-            {
-                'email': credentials.email,
-                'password': credentials.password,
-                'options': {'email_redirect_to': f'{os.getenv("FRONTEND_BASE_URL")}/verify-email'},
-            }
-        )
-        return {'detail': 'User registered successfully! Please verify your email before logging in.'}
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Something went wrong. Please try again later.',
-        )
+    await auth_service.register(credentials.email, credentials.password)
+    return {'detail': 'User registered successfully! Please verify your email before logging in.'}
 
 
-@router.post('/login', response_model=LoginResponse, dependencies=[Depends(LoginLimiter())] if is_production() else [])
+@router.post('/login', response_model=LoginResponse, dependencies=[Depends(LoginLimiter())] if IS_PRODUCTION else [])
 async def login_user(credentials: LoginRequest, response: Response):
-    supabase = get_supabase()
-    try:
-        res = await supabase.auth.sign_in_with_password(
-            {
-                'email': credentials.email,
-                'password': credentials.password,
-            }
-        )
-        set_refresh_cookie(response, res.session.refresh_token)
-        return {'access_token': res.session.access_token}
-    except AuthApiError as e:
-        if e.status == 400 and 'invalid login credentials' in e.message.lower():
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid credentials.')
-        if e.status == 400 and 'email not confirmed' in e.message.lower():
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail='Please verify your email before logging in.',
-            )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Something went wrong. Please try again later.',
-        )
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Something went wrong. Please try again later.',
-        )
+    access_token = await auth_service.login(credentials.email, credentials.password, response)
+    return {'access_token': access_token}
 
 
 @router.post(
     '/oauth/session',
     response_model=LoginResponse,
-    dependencies=[Depends(OAuthSessionLimiter())] if is_production() else [],
+    dependencies=[Depends(OAuthSessionLimiter())] if IS_PRODUCTION else [],
 )
-async def set_oauth_session(credentials: OAuthSessionRequest, response: Response):
-    supabase = get_supabase()
-    try:
-        user = await supabase.auth.get_user(credentials.access_token)
-        if not user:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid token.')
-        set_refresh_cookie(response, credentials.refresh_token)
-        return {'access_token': credentials.access_token}
-    except HTTPException as _:
-        raise
-    except AuthApiError as _:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid token.')
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Something went wrong. Please try again later.',
-        )
+async def handle_oauth_session(credentials: OAuthSessionRequest, response: Response):
+    access_token = await auth_service.set_oauth_session(credentials.access_token, credentials.refresh_token, response)
+    return {'access_token': access_token}
 
 
 @router.post('/logout')
 async def logout_user(response: Response, access_token: str = Depends(get_current_access_token)):
-    supabase = get_supabase()
-    try:
-        await supabase.auth.admin.sign_out(access_token, "local")
-    except Exception as _:
-        pass  # we want to clear the cookie even if the sign out fails for some reason
-    clear_refresh_cookie(response)
+    await auth_service.logout(access_token, response)
     return {'detail': 'Logged out successfully.'}
 
 
 @router.post(
-    '/refresh', response_model=RefreshResponse, dependencies=[Depends(RefreshLimiter())] if is_production() else []
+    '/refresh', response_model=RefreshResponse, dependencies=[Depends(RefreshLimiter())] if IS_PRODUCTION else []
 )
 async def refresh_token(request: Request, response: Response):
-    supabase = get_supabase()
-    refresh_token = request.cookies.get('refresh_token')
-    if not refresh_token:
+    token = request.cookies.get('refresh_token')
+    if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Missing refresh token.')
-
-    try:
-        res = await supabase.auth.refresh_session(refresh_token)
-        set_refresh_cookie(response, res.session.refresh_token)
-        return {'access_token': res.session.access_token}
-    except AuthApiError as _:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail='Invalid or expired refresh token.',
-        )
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Something went wrong. Please try again later.',
-        )
+    access_token = await auth_service.refresh(token, response)
+    return {'access_token': access_token}

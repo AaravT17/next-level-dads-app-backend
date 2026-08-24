@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, field_validator
-from app.modules.auth.service import validate_password_strength, strip_email
+from app.modules.auth.utils import validate_password_strength, strip_email
 
 
 class RegisterRequest(BaseModel):
@@ -7,11 +7,11 @@ class RegisterRequest(BaseModel):
     password: str
 
     @field_validator("email", mode="before")
-    def validate_email(cls, email):
+    def strip_email_whitespace(cls, email):
         return strip_email(email)
 
     @field_validator("password")
-    def validate_pwd_strength(cls, pwd):
+    def validate_password(cls, pwd):
         return validate_password_strength(pwd)
 
 
@@ -20,7 +20,7 @@ class LoginRequest(BaseModel):
     password: str
 
     @field_validator("email", mode="before")
-    def validate_email(cls, email):
+    def strip_email_whitespace(cls, email):
         return strip_email(email)
 
 

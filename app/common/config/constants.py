@@ -1,3 +1,8 @@
+import os
+
+# --- App ---
+IS_PRODUCTION = os.getenv('ENV') == 'production'
+
 # --- Auth ---
 MIN_PASSWORD_LENGTH = 8
 PASSWORD_SPECIAL_CHARACTERS = r'[-#!$@£%^&*()_+|~=`{}\[\]:";\'<>?,./\\]'
