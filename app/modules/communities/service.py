@@ -1,21 +1,29 @@
 from datetime import datetime
 from typing import Literal
-from fastapi import HTTPException, status
 from uuid import UUID
 import asyncpg
-
-from app.common.config.constants import CONVERSATIONS_PAGE_LIMIT, MESSAGES_PAGE_LIMIT, REPLIES_PAGE_LIMIT
+from fastapi import HTTPException, status
+from app.common.config.constants import (
+    COMMUNITIES_PAGE_LIMIT,
+    PROFILES_PAGE_LIMIT,
+    CONVERSATIONS_PAGE_LIMIT,
+    MESSAGES_PAGE_LIMIT,
+    REPLIES_PAGE_LIMIT,
+)
 from app.modules.communities.models import (
+    CommunityResponse,
     AuthorInfo,
     ConversationResponse,
     MessageResponse,
     ParticipantResponse,
     ReplyResponse,
 )
+from app.modules.users.models import CommunityMemberResponse
 
-REMOVED_CONVERSATION_TITLE = "Removed post"
-REMOVED_BY_ORIGINAL_POSTER = "Removed by original poster."
-REMOVED_BY_MODERATOR = "Removed by moderator."
+
+REMOVED_CONVERSATION_TITLE = 'Removed post'
+REMOVED_BY_ORIGINAL_POSTER = 'Removed by original poster.'
+REMOVED_BY_MODERATOR = 'Removed by moderator.'
 
 _CONVERSATION_COLS = """
     c.id,
@@ -95,10 +103,10 @@ _CONVERSATION_COLS = """
 
 _TIME_WINDOW_SQL: dict[str, str] = {
     'today': "AND c.last_activity_at >= NOW() - INTERVAL '1 day'",
-    'week':  "AND c.last_activity_at >= NOW() - INTERVAL '7 days'",
+    'week': "AND c.last_activity_at >= NOW() - INTERVAL '7 days'",
     'month': "AND c.last_activity_at >= NOW() - INTERVAL '30 days'",
-    'year':  "AND c.last_activity_at >= NOW() - INTERVAL '365 days'",
-    'all':   '',
+    'year': "AND c.last_activity_at >= NOW() - INTERVAL '365 days'",
+    'all': '',
 }
 
 _MESSAGE_COLS = """
@@ -170,6 +178,187 @@ _REPLY_COLS = """
     u.about      AS author_about,
     (SELECT COUNT(*) FROM reply_hearts rh WHERE rh.reply_id = r.id) AS heart_count
 """
+
+
+async def discover_communities(
+    conn: asyncpg.Connection,
+    user_id: str,
+    name: str | None,
+    cursor_id: str | None,
+    cursor_created_at: datetime | None,
+) -> list[CommunityResponse]:
+    try:
+        query, params = _build_discover_communities_query(
+            user_id=UUID(user_id),
+            name=name,
+            cursor_id=UUID(cursor_id) if cursor_id else None,
+            cursor_created_at=cursor_created_at,
+        )
+        res = await conn.fetch(query, *params)
+        return [CommunityResponse(**dict(r)) for r in res]
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch communities. Please try again later.',
+        )
+
+
+async def get_community(
+    conn: asyncpg.Connection,
+    community_id: str,
+    user_id: str,
+) -> CommunityResponse:
+    try:
+        query, params = _build_get_community_query(id=UUID(community_id), user_id=UUID(user_id))
+        res = await conn.fetchrow(query, *params)
+        if not res:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail='Community not found.',
+            )
+        return CommunityResponse(**dict(res))
+    except HTTPException:
+        raise
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch community details. Please try again later.',
+        )
+
+
+async def get_community_members(
+    conn: asyncpg.Connection,
+    community_id: str,
+    cursor_id: str | None,
+    cursor_joined_at: datetime | None,
+) -> list[CommunityMemberResponse]:
+    try:
+        query, params = _build_get_community_members_query(
+            id=UUID(community_id),
+            cursor_id=UUID(cursor_id) if cursor_id else None,
+            cursor_joined_at=cursor_joined_at,
+        )
+        res = await conn.fetch(query, *params)
+        return [CommunityMemberResponse(**dict(r)) for r in res]
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch community members. Please try again later.',
+        )
+
+
+async def get_user_communities(
+    conn: asyncpg.Connection,
+    user_id: str,
+    name: str | None,
+    cursor_id: str | None,
+    cursor_created_at: datetime | None,
+) -> list[CommunityResponse]:
+    try:
+        query, params = _build_get_user_communities_query(
+            user_id=UUID(user_id),
+            name=name,
+            cursor_id=UUID(cursor_id) if cursor_id else None,
+            cursor_created_at=cursor_created_at,
+        )
+        res = await conn.fetch(query, *params)
+        return [CommunityResponse(**dict(r)) for r in res]
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch communities. Please try again later.',
+        )
+
+
+async def create_community(
+    conn: asyncpg.Connection,
+    user_id: str,
+    name: str,
+    description: str | None,
+) -> str:
+    try:
+        user_id = UUID(user_id)
+        async with conn.transaction():
+            res = await conn.fetchrow(
+                """
+                INSERT INTO communities (name, description, created_by, created_at)
+                VALUES ($1, $2, $3, NOW())
+                RETURNING id
+                """,
+                name,
+                description,
+                user_id,
+            )
+            if not res:
+                raise Exception('Failed to create community.')
+            community_id = res['id']
+            await conn.execute(
+                """
+                INSERT INTO community_members (community_id, user_id, role, joined_at)
+                VALUES ($1, $2, 'admin', NOW())
+                """,
+                community_id,
+                user_id,
+            )
+        return str(community_id)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to create community. Please try again later.',
+        )
+
+
+async def join_community(
+    conn: asyncpg.Connection,
+    community_id: str,
+    user_id: str,
+):
+    try:
+        community_id, user_id = UUID(community_id), UUID(user_id)
+        await conn.execute(
+            """
+            INSERT INTO community_members (community_id, user_id, role, joined_at)
+            VALUES ($1, $2, 'member', NOW())
+            ON CONFLICT (community_id, user_id) DO NOTHING
+            """,
+            community_id,
+            user_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to join community. Please try again later.',
+        )
+
+
+async def leave_community(
+    conn: asyncpg.Connection,
+    community_id: str,
+    user_id: str,
+):
+    try:
+        community_id, user_id = UUID(community_id), UUID(user_id)
+        await conn.execute(
+            """
+            DELETE FROM community_members
+            WHERE community_id = $1 AND user_id = $2
+            """,
+            community_id,
+            user_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to leave community. Please try again later.',
+        )
 
 
 async def list_conversations(
@@ -280,7 +469,7 @@ async def list_messages(
     cursor_created_at: datetime | None = None,
 ) -> list[asyncpg.Record]:
     conditions = [
-        "m.conversation_id = $1",
+        'm.conversation_id = $1',
         """
         (
             EXISTS (
@@ -299,11 +488,11 @@ async def list_messages(
     i = 3
 
     if cursor_created_at and cursor_id:
-        conditions.append(f"(m.created_at, m.id) > (${i}, ${i + 1})")
+        conditions.append(f'(m.created_at, m.id) > (${i}, ${i + 1})')
         params.extend([cursor_created_at, cursor_id])
         i += 2
 
-    where_clause = " AND ".join(conditions)
+    where_clause = ' AND '.join(conditions)
     query = f"""
         SELECT
             {_MESSAGE_COLS},
@@ -408,13 +597,13 @@ async def _assert_content_active(
     input), so the f-string interpolation is safe.
     """
     exists = await conn.fetchval(
-        f"SELECT EXISTS(SELECT 1 FROM {table} WHERE id = $1 AND NOT is_deleted)",
+        f'SELECT EXISTS(SELECT 1 FROM {table} WHERE id = $1 AND NOT is_deleted)',
         content_id,
     )
     if not exists:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"{label} not found.",
+            detail=f'{label} not found.',
         )
 
 
@@ -423,9 +612,7 @@ async def heart_conversation(
     conversation_id: UUID,
     user_id: UUID,
 ) -> None:
-    await _assert_content_active(
-        conn, "conversations", conversation_id, "Conversation"
-    )
+    await _assert_content_active(conn, 'conversations', conversation_id, 'Conversation')
     await conn.execute(
         """
         INSERT INTO conversation_hearts (conversation_id, user_id)
@@ -443,7 +630,7 @@ async def unheart_conversation(
     user_id: UUID,
 ) -> None:
     await conn.execute(
-        "DELETE FROM conversation_hearts WHERE conversation_id = $1 AND user_id = $2",
+        'DELETE FROM conversation_hearts WHERE conversation_id = $1 AND user_id = $2',
         conversation_id,
         user_id,
     )
@@ -454,9 +641,7 @@ async def heart_message(
     message_id: UUID,
     user_id: UUID,
 ) -> None:
-    await _assert_content_active(
-        conn, "conversation_messages", message_id, "Message"
-    )
+    await _assert_content_active(conn, 'conversation_messages', message_id, 'Message')
     await conn.execute(
         """
         INSERT INTO message_hearts (message_id, user_id)
@@ -474,7 +659,7 @@ async def unheart_message(
     user_id: UUID,
 ) -> None:
     await conn.execute(
-        "DELETE FROM message_hearts WHERE message_id = $1 AND user_id = $2",
+        'DELETE FROM message_hearts WHERE message_id = $1 AND user_id = $2',
         message_id,
         user_id,
     )
@@ -488,20 +673,20 @@ async def _soft_delete_owned_content(
     label: str,
 ) -> None:
     record = await conn.fetchrow(
-        f"SELECT author_id, is_deleted FROM {table} WHERE id = $1",
+        f'SELECT author_id, is_deleted FROM {table} WHERE id = $1',
         content_id,
     )
     if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"{label} not found.",
+            detail=f'{label} not found.',
         )
-    if record["author_id"] != user_id:
+    if record['author_id'] != user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"You can only delete your own {label.lower()}.",
+            detail=f'You can only delete your own {label.lower()}.',
         )
-    if record["is_deleted"]:
+    if record['is_deleted']:
         return
 
     await conn.execute(
@@ -521,9 +706,7 @@ async def delete_conversation(
     conversation_id: UUID,
     user_id: UUID,
 ) -> None:
-    await _soft_delete_owned_content(
-        conn, "conversations", conversation_id, user_id, "Conversation"
-    )
+    await _soft_delete_owned_content(conn, 'conversations', conversation_id, user_id, 'Conversation')
 
 
 async def delete_message(
@@ -531,9 +714,7 @@ async def delete_message(
     message_id: UUID,
     user_id: UUID,
 ) -> None:
-    await _soft_delete_owned_content(
-        conn, "conversation_messages", message_id, user_id, "Message"
-    )
+    await _soft_delete_owned_content(conn, 'conversation_messages', message_id, user_id, 'Message')
 
 
 async def delete_reply(
@@ -541,101 +722,87 @@ async def delete_reply(
     reply_id: UUID,
     user_id: UUID,
 ) -> None:
-    await _soft_delete_owned_content(
-        conn, "message_replies", reply_id, user_id, "Reply"
-    )
+    await _soft_delete_owned_content(conn, 'message_replies', reply_id, user_id, 'Reply')
 
 
 def _author(record: asyncpg.Record) -> AuthorInfo | None:
-    if record["author_id"] is None:
+    if record['author_id'] is None:
         return None
     return AuthorInfo(
-        id=record["author_id"],
-        name=record["author_name"],
-        avatar_url=record["author_avatar_url"],
-        about=record["author_about"],
+        id=record['author_id'],
+        name=record['author_name'],
+        avatar_url=record['author_avatar_url'],
+        about=record['author_about'],
     )
 
 
 def record_to_conversation(record: asyncpg.Record) -> ConversationResponse:
-    is_deleted = record["is_deleted"]
-    placeholder = (
-        REMOVED_BY_MODERATOR
-        if record["deleted_by_moderator"]
-        else REMOVED_BY_ORIGINAL_POSTER
-    )
+    is_deleted = record['is_deleted']
+    placeholder = REMOVED_BY_MODERATOR if record['deleted_by_moderator'] else REMOVED_BY_ORIGINAL_POSTER
     return ConversationResponse(
-        id=record["id"],
-        community_id=record["community_id"],
+        id=record['id'],
+        community_id=record['community_id'],
         author=_author(record),
-        title=REMOVED_CONVERSATION_TITLE if is_deleted else record["title"],
-        body=placeholder if is_deleted else record["body"],
-        prompt_type=record["prompt_type"],
-        reply_count=record["reply_count"],
-        heart_count=record["heart_count"],
-        participant_count=record["participant_count"],
-        is_hearted=record["is_hearted"],
+        title=REMOVED_CONVERSATION_TITLE if is_deleted else record['title'],
+        body=placeholder if is_deleted else record['body'],
+        prompt_type=record['prompt_type'],
+        reply_count=record['reply_count'],
+        heart_count=record['heart_count'],
+        participant_count=record['participant_count'],
+        is_hearted=record['is_hearted'],
         is_deleted=is_deleted,
-        has_pending_report=record["has_pending_report"],
-        deleted_at=record["deleted_at"],
-        created_at=record["created_at"],
-        updated_at=record["updated_at"],
-        last_activity_at=record["last_activity_at"],
+        has_pending_report=record['has_pending_report'],
+        deleted_at=record['deleted_at'],
+        created_at=record['created_at'],
+        updated_at=record['updated_at'],
+        last_activity_at=record['last_activity_at'],
     )
 
 
 def record_to_message(record: asyncpg.Record) -> MessageResponse:
-    is_deleted = record["is_deleted"]
-    placeholder = (
-        REMOVED_BY_MODERATOR
-        if record["deleted_by_moderator"]
-        else REMOVED_BY_ORIGINAL_POSTER
-    )
+    is_deleted = record['is_deleted']
+    placeholder = REMOVED_BY_MODERATOR if record['deleted_by_moderator'] else REMOVED_BY_ORIGINAL_POSTER
     return MessageResponse(
-        id=record["id"],
-        conversation_id=record["conversation_id"],
+        id=record['id'],
+        conversation_id=record['conversation_id'],
         author=_author(record),
-        body=placeholder if is_deleted else record["body"],
-        reply_count=record["reply_count"],
-        heart_count=record["heart_count"],
-        is_hearted=record["is_hearted"],
+        body=placeholder if is_deleted else record['body'],
+        reply_count=record['reply_count'],
+        heart_count=record['heart_count'],
+        is_hearted=record['is_hearted'],
         is_deleted=is_deleted,
-        has_pending_report=record["has_pending_report"],
-        deleted_at=record["deleted_at"],
-        created_at=record["created_at"],
-        updated_at=record["updated_at"],
+        has_pending_report=record['has_pending_report'],
+        deleted_at=record['deleted_at'],
+        created_at=record['created_at'],
+        updated_at=record['updated_at'],
     )
 
 
 def record_to_reply(record: asyncpg.Record) -> ReplyResponse:
-    is_deleted = record["is_deleted"]
-    placeholder = (
-        REMOVED_BY_MODERATOR
-        if record["deleted_by_moderator"]
-        else REMOVED_BY_ORIGINAL_POSTER
-    )
+    is_deleted = record['is_deleted']
+    placeholder = REMOVED_BY_MODERATOR if record['deleted_by_moderator'] else REMOVED_BY_ORIGINAL_POSTER
     return ReplyResponse(
-        id=record["id"],
-        message_id=record["message_id"],
+        id=record['id'],
+        message_id=record['message_id'],
         author=_author(record),
-        body=placeholder if is_deleted else record["body"],
-        heart_count=record["heart_count"],
-        is_hearted=record["is_hearted"],
+        body=placeholder if is_deleted else record['body'],
+        heart_count=record['heart_count'],
+        is_hearted=record['is_hearted'],
         is_deleted=is_deleted,
-        has_pending_report=record["has_pending_report"],
-        deleted_at=record["deleted_at"],
-        created_at=record["created_at"],
-        updated_at=record["updated_at"],
+        has_pending_report=record['has_pending_report'],
+        deleted_at=record['deleted_at'],
+        created_at=record['created_at'],
+        updated_at=record['updated_at'],
     )
 
 
 def record_to_participant(record: asyncpg.Record) -> ParticipantResponse:
     return ParticipantResponse(
-        id=record["id"],
-        name=record["name"],
-        avatar_url=record["avatar_url"],
-        first_joined_at=record["first_joined_at"],
-        last_active_at=record["last_active_at"],
+        id=record['id'],
+        name=record['name'],
+        avatar_url=record['avatar_url'],
+        first_joined_at=record['first_joined_at'],
+        last_active_at=record['last_active_at'],
     )
 
 
@@ -706,7 +873,7 @@ async def heart_reply(
     reply_id: UUID,
     user_id: UUID,
 ) -> None:
-    await _assert_content_active(conn, "message_replies", reply_id, "Reply")
+    await _assert_content_active(conn, 'message_replies', reply_id, 'Reply')
     await conn.execute(
         """
         INSERT INTO reply_hearts (reply_id, user_id)
@@ -724,7 +891,7 @@ async def unheart_reply(
     user_id: UUID,
 ) -> None:
     await conn.execute(
-        "DELETE FROM reply_hearts WHERE reply_id = $1 AND user_id = $2",
+        'DELETE FROM reply_hearts WHERE reply_id = $1 AND user_id = $2',
         reply_id,
         user_id,
     )
@@ -750,7 +917,7 @@ async def reply_to_message(
     if not exists:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Message not found.",
+            detail='Message not found.',
         )
 
     row = await insert_reply(conn, message_id, author_id, body)
@@ -763,12 +930,12 @@ async def reply_to_message(
         LEFT JOIN public.users u ON u.id = r.author_id
         WHERE r.id = $1
         """,
-        row["id"],
+        row['id'],
     )
     if record is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch created reply.",
+            detail='Failed to fetch created reply.',
         )
     return record_to_reply(record)
 
@@ -781,20 +948,18 @@ async def start_conversation(
     body: str,
     prompt_type: str | None,
 ) -> ConversationResponse:
-    exists = await conn.fetchval(
-        "SELECT EXISTS(SELECT 1 FROM communities WHERE id = $1)", community_id
-    )
+    exists = await conn.fetchval('SELECT EXISTS(SELECT 1 FROM communities WHERE id = $1)', community_id)
     if not exists:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Community not found.",
+            detail='Community not found.',
         )
 
     async with conn.transaction():
         row = await insert_conversation(conn, community_id, author_id, title, body, prompt_type)
-        await upsert_participant(conn, row["id"], author_id)
+        await upsert_participant(conn, row['id'], author_id)
 
-    full = await get_conversation(conn, row["id"], author_id)
+    full = await get_conversation(conn, row['id'], author_id)
     return record_to_conversation(full)
 
 
@@ -805,13 +970,13 @@ async def reply_to_conversation(
     body: str,
 ) -> MessageResponse:
     exists = await conn.fetchval(
-        "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = $1 AND NOT is_deleted)",
+        'SELECT EXISTS(SELECT 1 FROM conversations WHERE id = $1 AND NOT is_deleted)',
         conversation_id,
     )
     if not exists:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Conversation not found.",
+            detail='Conversation not found.',
         )
 
     async with conn.transaction():
@@ -831,11 +996,125 @@ async def reply_to_conversation(
         LEFT JOIN public.users u ON u.id = m.author_id
         WHERE m.id = $1
         """,
-        row["id"],
+        row['id'],
     )
     if record is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch created message.",
+            detail='Failed to fetch created message.',
         )
     return record_to_message(record)
+
+
+# --- Private helpers ---
+
+
+def _build_discover_communities_query(
+    user_id: UUID,
+    name: str | None = None,
+    cursor_id: UUID | None = None,
+    cursor_created_at: datetime | None = None,
+) -> tuple[str, list]:
+    conditions = ['NOT EXISTS (SELECT 1 FROM community_members cm WHERE cm.community_id = c.id AND cm.user_id = $1)']
+    params = [user_id]
+    i = 2
+
+    if name:
+        conditions.append(f'c.name ILIKE ${i}')
+        params.append(f'%{name}%')
+        i += 1
+
+    if cursor_created_at and cursor_id:
+        conditions.append(f'(c.created_at, c.id) < (${i}, ${i + 1})')
+        params.extend([cursor_created_at, cursor_id])
+        i += 2
+
+    where_clause = ' AND '.join(conditions)
+    query = f"""
+        SELECT c.*,
+        (SELECT COUNT(*) FROM community_members cm WHERE cm.community_id = c.id) AS member_count,
+        FALSE AS is_member, NULL AS role
+        FROM communities c
+        WHERE {where_clause}
+        ORDER BY c.created_at DESC, c.id DESC
+        LIMIT ${i}
+    """
+    params.append(COMMUNITIES_PAGE_LIMIT)
+
+    return query, params
+
+
+def _build_get_user_communities_query(
+    user_id: UUID,
+    name: str | None = None,
+    cursor_id: UUID | None = None,
+    cursor_created_at: datetime | None = None,
+) -> tuple[str, list]:
+    i = 2
+    conditions = ['cm.user_id = $1']
+    params = [user_id]
+
+    if name:
+        conditions.append(f'c.name ILIKE ${i}')
+        params.append(f'%{name}%')
+        i += 1
+
+    if cursor_created_at and cursor_id:
+        conditions.append(f'(c.created_at, c.id) < (${i}, ${i + 1})')
+        params.extend([cursor_created_at, cursor_id])
+        i += 2
+
+    where_clause = ' AND '.join(conditions)
+    query = f"""
+        SELECT c.*,
+        (SELECT COUNT(*) FROM community_members cm WHERE cm.community_id = c.id) AS member_count, cm.role, TRUE AS is_member
+        FROM communities c
+        JOIN community_members cm ON c.id = cm.community_id
+        WHERE {where_clause}
+        ORDER BY c.created_at DESC, c.id DESC
+        LIMIT ${i}
+    """
+    params.append(COMMUNITIES_PAGE_LIMIT)
+
+    return query, params
+
+
+def _build_get_community_query(id: UUID, user_id: UUID) -> tuple[str, list]:
+    query = """
+        SELECT c.*,
+        (SELECT COUNT(*) FROM community_members cm WHERE cm.community_id = c.id) AS member_count,
+        cm.role, (CASE WHEN cm.user_id IS NOT NULL THEN TRUE ELSE FALSE END) AS is_member
+        FROM communities c
+        LEFT JOIN community_members cm ON c.id = cm.community_id AND cm.user_id = $2
+        WHERE c.id = $1
+    """
+    params = [id, user_id]
+    return query, params
+
+
+def _build_get_community_members_query(
+    id: UUID,
+    cursor_id: UUID | None = None,
+    cursor_joined_at: datetime | None = None,
+) -> tuple[str, list]:
+    conditions = ['cm.community_id = $1']
+    params = [id]
+    i = 2
+
+    if cursor_joined_at and cursor_id:
+        conditions.append(f'(cm.joined_at, cm.user_id) < (${i}, ${i + 1})')
+        params.extend([cursor_joined_at, cursor_id])
+        i += 2
+
+    where_clause = ' AND '.join(conditions)
+    query = f"""
+        SELECT u.*, cm.joined_at, cm.role
+        FROM user_profiles u
+        JOIN community_members cm ON u.id = cm.user_id
+        WHERE {where_clause}
+        ORDER BY cm.joined_at DESC, cm.user_id DESC
+        LIMIT ${i}
+    """
+    params.append(PROFILES_PAGE_LIMIT)
+
+    return query, params

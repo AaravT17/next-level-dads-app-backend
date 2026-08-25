@@ -1,10 +1,155 @@
 from uuid import UUID
 from datetime import datetime
-from app.common.config.constants import EVENTS_PAGE_LIMIT
 from typing import Literal
 
+import asyncpg
+from fastapi import HTTPException, status
 
-def build_discover_events_query(
+from app.common.config.constants import EVENTS_PAGE_LIMIT
+from app.modules.events.models import EventResponse
+
+
+async def discover_events(
+    conn: asyncpg.Connection,
+    user_id: str,
+    name: str | None,
+    event_type: Literal['local', 'virtual'] | None,
+    is_free: bool | None,
+    cursor_id: str | None,
+    cursor_starts_at: datetime | None,
+) -> list[EventResponse]:
+    try:
+        query, params = _build_discover_events_query(
+            user_id=UUID(user_id),
+            name=name,
+            event_type=event_type,
+            is_free=is_free,
+            cursor_id=UUID(cursor_id) if cursor_id else None,
+            cursor_starts_at=cursor_starts_at,
+        )
+        res = await conn.fetch(query, *params)
+        return [EventResponse(**dict(r)) for r in res]
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch events. Please try again later.',
+        )
+
+
+async def get_event(
+    conn: asyncpg.Connection,
+    event_id: str,
+    user_id: str,
+) -> EventResponse:
+    try:
+        query, params = _build_get_event_query(id=UUID(event_id), user_id=UUID(user_id))
+        res = await conn.fetchrow(query, *params)
+        if not res:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Event not found')
+        return EventResponse(**dict(res))
+    except HTTPException:
+        raise
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch event details. Please try again later.',
+        )
+
+
+async def register_for_event(
+    conn: asyncpg.Connection,
+    event_id: str,
+    user_id: str,
+):
+    # TODO: For paid events, integrate with payment gateway and only register user after successful payment
+    try:
+        event_id, user_id = UUID(event_id), UUID(user_id)
+        res = await conn.fetchval(
+            """
+            SELECT price_cad from events WHERE id = $1
+            """,
+            event_id,
+            column=0,
+        )
+        if res is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Event not found')
+        price = float(res)
+        if price > 0:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail='Cannot register for paid events through this endpoint.',
+            )
+        await conn.execute(
+            """
+            INSERT INTO event_attendees (event_id, user_id, joined_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT DO NOTHING
+            """,
+            event_id,
+            user_id,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to register for event. Please try again later.',
+        )
+
+
+async def unregister_from_event(
+    conn: asyncpg.Connection,
+    event_id: str,
+    user_id: str,
+):
+    try:
+        event_id, user_id = UUID(event_id), UUID(user_id)
+        await conn.execute(
+            """
+            DELETE FROM event_attendees
+            WHERE event_id = $1 AND user_id = $2
+            """,
+            event_id,
+            user_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to unregister from event. Please try again later.',
+        )
+
+
+async def get_user_events(
+    conn: asyncpg.Connection,
+    user_id: str,
+    name: str | None,
+    cursor_id: UUID | None,
+    cursor_starts_at: datetime | None,
+) -> list[EventResponse]:
+    try:
+        query, params = _build_get_user_events_query(
+            user_id=UUID(user_id),
+            name=name,
+            cursor_id=cursor_id,
+            cursor_starts_at=cursor_starts_at,
+        )
+        res = await conn.fetch(query, *params)
+        return [EventResponse(**dict(r)) for r in res]
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch events. Please try again later.',
+        )
+
+
+# --- Private helpers ---
+
+
+def _build_discover_events_query(
     user_id: UUID,
     name: str | None = None,
     event_type: Literal["local", "virtual"] | None = None,
@@ -55,7 +200,7 @@ def build_discover_events_query(
     return query, params
 
 
-def build_user_events_query(
+def _build_get_user_events_query(
     user_id: UUID,
     name: str | None = None,
     cursor_id: UUID | None = None,
@@ -91,7 +236,7 @@ def build_user_events_query(
     return query, params
 
 
-def build_get_event_by_id_query(
+def _build_get_event_query(
     id: UUID,
     user_id: UUID,
 ) -> tuple[str, list]:

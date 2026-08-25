@@ -1,9 +1,7 @@
 from datetime import datetime
 from uuid import UUID
-
 import asyncpg
 from fastapi import HTTPException, status
-
 from app.common.config.constants import (
     PROFILES_PAGE_LIMIT,
 )
@@ -11,6 +9,7 @@ from app.modules.connections.models import (
     ConnectionProfileResponse,
     ConnectionStatusResponse,
 )
+from app.modules.connections.utils import resolve_connection_status
 
 
 async def get_connections(
@@ -204,18 +203,6 @@ async def remove_connection(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Failed to remove connection. Please try again later.',
         )
-
-
-def resolve_connection_status(user_id: UUID, requesting_id: UUID | None, connection_status: str | None) -> str | None:
-    if connection_status == 'accepted':
-        return 'connected'
-    if connection_status == 'pending' and requesting_id == user_id:
-        return 'pending_outgoing'
-    if connection_status == 'pending' and requesting_id != user_id:
-        return 'pending_incoming'
-    if connection_status == 'blocked':
-        return 'blocked'
-    return None
 
 
 def _build_get_connections_query(

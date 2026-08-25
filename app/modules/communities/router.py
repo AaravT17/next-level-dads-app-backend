@@ -14,11 +14,7 @@ from app.common.dependencies.db import get_db, get_pool
 from app.modules.moderation.models import ContentType
 from app.modules.moderation.service import assert_not_banned, moderate_content
 import asyncpg
-from app.modules.communities.communities import (
-    build_discover_communities_query,
-    build_get_community_by_id_query,
-    build_get_community_members_query,
-)
+import app.modules.communities.service as communities_service
 from app.modules.communities.models import (
     ConversationCreate,
     ConversationResponse,
@@ -27,29 +23,6 @@ from app.modules.communities.models import (
     ParticipantResponse,
     ReplyCreate,
     ReplyResponse,
-)
-from app.modules.communities.communities_service import (
-    list_conversations,
-    get_conversation,
-    list_messages,
-    list_participants,
-    list_replies,
-    heart_conversation,
-    unheart_conversation,
-    heart_message,
-    unheart_message,
-    heart_reply,
-    unheart_reply,
-    delete_conversation,
-    delete_message,
-    delete_reply,
-    start_conversation,
-    reply_to_conversation,
-    reply_to_message,
-    record_to_conversation,
-    record_to_message,
-    record_to_participant,
-    record_to_reply,
 )
 from uuid import UUID
 from datetime import datetime
@@ -61,34 +34,14 @@ router = APIRouter(
 
 
 @router.get('/', response_model=list[CommunityResponse])
-async def get_communities(
+async def discover_communities(
     name: str | None = None,
     cursor_id: str | None = None,
     cursor_created_at: datetime | None = None,
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_consented_user),
 ):
-    try:
-        query, params = build_discover_communities_query(
-            user_id=UUID(user_id),
-            name=name,
-            cursor_id=UUID(cursor_id) if cursor_id else None,
-            cursor_created_at=cursor_created_at,
-        )
-        res = await conn.fetch(query, *params)
-        return [CommunityResponse(**dict(r)) for r in res]
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to fetch communities. Please try again later.',
-        )
+    return await communities_service.discover_communities(conn, user_id, name, cursor_id, cursor_created_at)
 
 
 @router.post(
@@ -104,58 +57,17 @@ async def create_community(
     description: str | None = Body(None, max_length=500),
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    user_id = UUID(request.state.user_id)
-    try:
-        async with conn.transaction():
-            query = """
-                INSERT INTO communities (name, description, created_by, created_at)
-                VALUES ($1, $2, $3, NOW())
-                RETURNING id
-            """
-            res = await conn.fetchrow(query, *[name, description, user_id])
-            if not res:
-                raise Exception('Failed to create community.')
-            community_id = res['id']
-            query = """
-                INSERT INTO community_members (community_id, user_id, role, joined_at)
-                VALUES ($1, $2, 'admin', NOW())
-            """
-            await conn.execute(query, *[community_id, user_id])
-        return {'id': str(community_id)}
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to create community. Please try again later.',
-        )
+    community_id = await communities_service.create_community(conn, request.state.user_id, name, description)
+    return {'id': community_id}
 
 
 @router.get('/{id}', response_model=CommunityResponse)
-async def get_community_by_id(
+async def get_community(
     id: str,
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_consented_user),
 ):
-    try:
-        query, params = build_get_community_by_id_query(id=UUID(id), user_id=UUID(user_id))
-        res = await conn.fetchrow(query, *params)
-        if not res:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail='Community not found.',
-            )
-        return CommunityResponse(**dict(res))
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to fetch community details. Please try again later.',
-        )
+    return await communities_service.get_community(conn, id, user_id)
 
 
 @router.get('/{id}/members', response_model=list[CommunityMemberResponse])
@@ -166,26 +78,7 @@ async def get_community_members(
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_consented_user),
 ):
-    try:
-        query, params = build_get_community_members_query(
-            id=UUID(id),
-            cursor_id=UUID(cursor_id) if cursor_id else None,
-            cursor_joined_at=cursor_joined_at,
-        )
-        res = await conn.fetch(query, *params)
-        return [CommunityMemberResponse(**dict(r)) for r in res]
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to fetch community members. Please try again later.',
-        )
+    return await communities_service.get_community_members(conn, id, cursor_id, cursor_joined_at)
 
 
 @router.post('/{id}/members', status_code=status.HTTP_204_NO_CONTENT)
@@ -194,20 +87,7 @@ async def join_community(
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_consented_user),
 ):
-    try:
-        id, user_id = UUID(id), UUID(user_id)
-        query = """
-            INSERT INTO community_members (community_id, user_id, role, joined_at)
-            VALUES ($1, $2, 'member', NOW())
-            ON CONFLICT (community_id, user_id) DO NOTHING
-        """
-        await conn.execute(query, *[id, user_id])
-        return
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to join community. Please try again later.',
-        )
+    await communities_service.join_community(conn, id, user_id)
 
 
 @router.delete('/{id}/members', status_code=status.HTTP_204_NO_CONTENT)
@@ -216,19 +96,7 @@ async def leave_community(
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_consented_user),
 ):
-    try:
-        id, user_id = UUID(id), UUID(user_id)
-        query = """
-            DELETE FROM community_members
-            WHERE community_id = $1 AND user_id = $2
-        """
-        await conn.execute(query, *[id, user_id])
-        return
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to leave community. Please try again later.',
-        )
+    await communities_service.leave_community(conn, id, user_id)
 
 
 @router.get('/{community_id}/conversations', response_model=list[ConversationResponse])
@@ -244,7 +112,7 @@ async def get_community_conversations(
     user_id: str = Depends(get_consented_user),
 ):
     try:
-        records = await list_conversations(
+        records = await communities_service.list_conversations(
             conn,
             UUID(community_id),
             UUID(user_id),
@@ -255,7 +123,7 @@ async def get_community_conversations(
             cursor_heart_count=cursor_heart_count,
             cursor_reply_count=cursor_reply_count,
         )
-        return [record_to_conversation(r) for r in records]
+        return [communities_service.record_to_conversation(r) for r in records]
     except HTTPException:
         raise
     except ValueError as e:
@@ -287,7 +155,9 @@ async def create_conversation(
         uid = UUID(request.state.user_id)
         cid = UUID(community_id)
         await assert_not_banned(conn, uid)
-        conversation = await start_conversation(conn, cid, uid, payload.title, payload.body, payload.prompt_type)
+        conversation = await communities_service.start_conversation(
+            conn, cid, uid, payload.title, payload.body, payload.prompt_type
+        )
         background_tasks.add_task(
             moderate_content,
             pool,
@@ -324,13 +194,13 @@ async def get_single_conversation(
     user_id: str = Depends(get_consented_user),
 ):
     try:
-        record = await get_conversation(conn, UUID(conversation_id), UUID(user_id))
+        record = await communities_service.get_conversation(conn, UUID(conversation_id), UUID(user_id))
         if not record:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail='Conversation not found.',
             )
-        return record_to_conversation(record)
+        return communities_service.record_to_conversation(record)
     except HTTPException:
         raise
     except ValueError as e:
@@ -349,7 +219,7 @@ async def delete_a_conversation(
     user_id: str = Depends(get_consented_user),
 ):
     try:
-        await delete_conversation(conn, UUID(conversation_id), UUID(user_id))
+        await communities_service.delete_conversation(conn, UUID(conversation_id), UUID(user_id))
     except HTTPException:
         raise
     except ValueError as e:
@@ -370,14 +240,14 @@ async def get_conversation_messages(
     user_id: str = Depends(get_consented_user),
 ):
     try:
-        records = await list_messages(
+        records = await communities_service.list_messages(
             conn,
             UUID(conversation_id),
             UUID(user_id),
             cursor_id=UUID(cursor_id) if cursor_id else None,
             cursor_created_at=cursor_created_at,
         )
-        return [record_to_message(r) for r in records]
+        return [communities_service.record_to_message(r) for r in records]
     except HTTPException:
         raise
     except ValueError as e:
@@ -408,7 +278,7 @@ async def create_message(
     try:
         uid = UUID(request.state.user_id)
         await assert_not_banned(conn, uid)
-        message = await reply_to_conversation(conn, UUID(conversation_id), uid, payload.body)
+        message = await communities_service.reply_to_conversation(conn, UUID(conversation_id), uid, payload.body)
         background_tasks.add_task(
             moderate_content,
             pool,
@@ -437,8 +307,8 @@ async def get_conversation_participants(
     user_id: str = Depends(get_consented_user),
 ):
     try:
-        records = await list_participants(conn, UUID(conversation_id))
-        return [record_to_participant(r) for r in records]
+        records = await communities_service.list_participants(conn, UUID(conversation_id))
+        return [communities_service.record_to_participant(r) for r in records]
     except HTTPException:
         raise
     except ValueError as e:
@@ -459,7 +329,7 @@ async def heart_a_conversation(
     try:
         uid = UUID(user_id)
         await assert_not_banned(conn, uid)
-        await heart_conversation(conn, UUID(conversation_id), uid)
+        await communities_service.heart_conversation(conn, UUID(conversation_id), uid)
     except HTTPException:
         raise
     except ValueError as e:
@@ -478,7 +348,7 @@ async def unheart_a_conversation(
     user_id: str = Depends(get_consented_user),
 ):
     try:
-        await unheart_conversation(conn, UUID(conversation_id), UUID(user_id))
+        await communities_service.unheart_conversation(conn, UUID(conversation_id), UUID(user_id))
     except HTTPException:
         raise
     except ValueError as e:
@@ -507,7 +377,7 @@ async def heart_a_message(
     try:
         uid = UUID(user_id)
         await assert_not_banned(conn, uid)
-        await heart_message(conn, UUID(message_id), uid)
+        await communities_service.heart_message(conn, UUID(message_id), uid)
     except HTTPException:
         raise
     except ValueError as e:
@@ -526,7 +396,7 @@ async def delete_a_message(
     user_id: str = Depends(get_consented_user),
 ):
     try:
-        await delete_message(conn, UUID(message_id), UUID(user_id))
+        await communities_service.delete_message(conn, UUID(message_id), UUID(user_id))
     except HTTPException:
         raise
     except ValueError as e:
@@ -545,7 +415,7 @@ async def unheart_a_message(
     user_id: str = Depends(get_consented_user),
 ):
     try:
-        await unheart_message(conn, UUID(message_id), UUID(user_id))
+        await communities_service.unheart_message(conn, UUID(message_id), UUID(user_id))
     except HTTPException:
         raise
     except ValueError as e:
@@ -566,14 +436,14 @@ async def get_message_replies(
     user_id: str = Depends(get_consented_user),
 ):
     try:
-        records = await list_replies(
+        records = await communities_service.list_replies(
             conn,
             UUID(message_id),
             UUID(user_id),
             cursor_id=UUID(cursor_id) if cursor_id else None,
             cursor_heart_count=cursor_heart_count,
         )
-        return [record_to_reply(r) for r in records]
+        return [communities_service.record_to_reply(r) for r in records]
     except HTTPException:
         raise
     except ValueError as e:
@@ -604,7 +474,7 @@ async def create_reply(
     try:
         uid = UUID(request.state.user_id)
         await assert_not_banned(conn, uid)
-        reply = await reply_to_message(conn, UUID(message_id), uid, payload.body)
+        reply = await communities_service.reply_to_message(conn, UUID(message_id), uid, payload.body)
         background_tasks.add_task(
             moderate_content,
             pool,
@@ -643,7 +513,7 @@ async def heart_a_reply(
     try:
         uid = UUID(user_id)
         await assert_not_banned(conn, uid)
-        await heart_reply(conn, UUID(reply_id), uid)
+        await communities_service.heart_reply(conn, UUID(reply_id), uid)
     except HTTPException:
         raise
     except ValueError as e:
@@ -662,7 +532,7 @@ async def delete_a_reply(
     user_id: str = Depends(get_consented_user),
 ):
     try:
-        await delete_reply(conn, UUID(reply_id), UUID(user_id))
+        await communities_service.delete_reply(conn, UUID(reply_id), UUID(user_id))
     except HTTPException:
         raise
     except ValueError as e:
@@ -681,7 +551,7 @@ async def unheart_a_reply(
     user_id: str = Depends(get_consented_user),
 ):
     try:
-        await unheart_reply(conn, UUID(reply_id), UUID(user_id))
+        await communities_service.unheart_reply(conn, UUID(reply_id), UUID(user_id))
     except HTTPException:
         raise
     except ValueError as e:
