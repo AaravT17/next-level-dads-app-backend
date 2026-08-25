@@ -1,4 +1,3 @@
-import os
 from fastapi import HTTPException, Request, status
 from fastapi_limiter.depends import RateLimiter
 
@@ -27,10 +26,6 @@ async def rate_limit_exceeded_callback(*__args):
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail='Too many requests. Please try again later.',
     )
-
-
-def is_production() -> bool:
-    return os.getenv('ENV') == 'production'
 
 
 # --- Rate limiters ---

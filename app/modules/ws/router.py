@@ -1,9 +1,9 @@
 from fastapi import APIRouter, status, Query, WebSocket, WebSocketDisconnect
-from app.modules.auth.service import verify_token
+import app.modules.auth.service as auth_service
 from app.common.dependencies.auth import check_consent
 from app.common.ws.connection_manager import connect, disconnect
 from app.common.config.redis import publish
-from app.modules.chats.service import mark_chat_read
+import app.modules.chats.service as chats_service
 import json
 
 
@@ -15,7 +15,7 @@ router = APIRouter(
 
 @router.websocket('/')
 async def chat_websocket(ws: WebSocket, token: str = Query(..., min_length=1), connection_id: str = Query(...)):
-    user_id = await verify_token(token)
+    user_id = await auth_service.verify_token(token)
     if not user_id:
         await ws.close(code=status.WS_1008_POLICY_VIOLATION)
         return
@@ -41,7 +41,7 @@ async def chat_websocket(ws: WebSocket, token: str = Query(..., min_length=1), c
                     continue
                 try:
                     async with ws.app.state.pool.acquire() as conn:
-                        last_read_at = await mark_chat_read(conn, user_id, chat_id)
+                        last_read_at = await chats_service.mark_chat_read(conn, user_id, chat_id)
                     if last_read_at:
                         await publish(
                             user_id,

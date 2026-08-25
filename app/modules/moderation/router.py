@@ -1,9 +1,8 @@
 from uuid import UUID
-
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
-from app.common.dependencies.rate_limiting import ReportContentLimiter, ReportUserLimiter, is_production
-
+from app.common.config.constants import IS_PRODUCTION
+from app.common.dependencies.rate_limiting import ReportContentLimiter, ReportUserLimiter
 from app.common.dependencies.auth import get_consented_user
 from app.common.dependencies.db import get_db
 from app.modules.moderation.models import (
@@ -34,7 +33,7 @@ router = APIRouter(
     response_model=ReportResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(get_consented_user), Depends(ReportContentLimiter())]
-    if is_production()
+    if IS_PRODUCTION
     else [Depends(get_consented_user)],
 )
 async def create_report(
@@ -151,7 +150,7 @@ async def read_all_notifications(
     response_model=UserReportResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(get_consented_user), Depends(ReportUserLimiter())]
-    if is_production()
+    if IS_PRODUCTION
     else [Depends(get_consented_user)],
 )
 async def create_user_report(

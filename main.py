@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 from app.common.config.supabase import init_supabase
 import asyncpg
 from fastapi_limiter import FastAPILimiter
-from app.common.dependencies.rate_limiting import is_production
+from app.common.config.constants import IS_PRODUCTION
 
 
 @asynccontextmanager
@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
             ssl='require',
             statement_cache_size=0,
         )
-        if is_production():
+        if IS_PRODUCTION:
             await FastAPILimiter.init(get_redis())
     except Exception as _:
         await close_pubsub()
@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI):
         raise SystemExit(1)
     yield
     await close_pubsub()
-    if is_production():
+    if IS_PRODUCTION:
         await FastAPILimiter.close()
     await close_redis()
     await app.state.pool.close()

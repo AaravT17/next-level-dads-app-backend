@@ -7,17 +7,15 @@ runs inline on the request path before content is inserted.
 
 import logging
 from uuid import UUID
-
 import asyncpg
 from fastapi import HTTPException, status
-
 from app.common.config.constants import (
     MODERATION_BAN_DURATION_HOURS,
     MODERATION_BAN_THRESHOLD,
     MODERATION_BAN_WINDOW_HOURS,
     MODERATION_NOTIFICATIONS_PAGE_LIMIT,
 )
-from app.moderation import repository as repo
+from app.modules.moderation import repository as repo
 from app.modules.moderation.messages import build_ban_message, build_removal_message
 from app.modules.moderation.models import (
     ContentType,
