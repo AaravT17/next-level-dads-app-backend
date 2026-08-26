@@ -426,6 +426,9 @@ async def send_message(
         created_at=row['created_at'],
     )
 
+    # TODO: Since we want to support multiple active connections per user, we need to publish to 
+    # the sender as well (for their other connections)
+
     # publish to all participants except the sender, fire off as background task, don't delay response
     asyncio.create_task(
         _publish_event(
@@ -447,6 +450,7 @@ async def _publish_event(
         try:
             await publish(str(uid), {'user_id': str(uid), 'event_data': {'type': type, 'payload': payload}})
         except Exception:
+            # TODO: Log the exception
             pass
 
     await asyncio.gather(*[_safe_publish(uid) for uid in publish_to])

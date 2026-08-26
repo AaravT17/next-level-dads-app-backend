@@ -40,19 +40,17 @@ async def discover_events(
 
 async def get_event(
     conn: asyncpg.Connection,
-    event_id: str,
+    event_id: UUID,
     user_id: str,
 ) -> EventResponse:
     try:
-        query, params = _build_get_event_query(id=UUID(event_id), user_id=UUID(user_id))
+        query, params = _build_get_event_query(id=event_id, user_id=UUID(user_id))
         res = await conn.fetchrow(query, *params)
         if not res:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Event not found')
         return EventResponse(**dict(res))
     except HTTPException:
         raise
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -62,12 +60,12 @@ async def get_event(
 
 async def register_for_event(
     conn: asyncpg.Connection,
-    event_id: str,
+    event_id: UUID,
     user_id: str,
 ):
-    # TODO: For paid events, integrate with payment gateway and only register user after successful payment
+    # TODO: Implement registration for paid events.
     try:
-        event_id, user_id = UUID(event_id), UUID(user_id)
+        user_id = UUID(user_id)
         res = await conn.fetchval(
             """
             SELECT price_cad from events WHERE id = $1
@@ -79,6 +77,7 @@ async def register_for_event(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Event not found')
         price = float(res)
         if price > 0:
+            # Registering for paid events is yet to be implemented.
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail='Cannot register for paid events through this endpoint.',
@@ -103,11 +102,11 @@ async def register_for_event(
 
 async def unregister_from_event(
     conn: asyncpg.Connection,
-    event_id: str,
+    event_id: UUID,
     user_id: str,
 ):
     try:
-        event_id, user_id = UUID(event_id), UUID(user_id)
+        user_id = UUID(user_id)
         await conn.execute(
             """
             DELETE FROM event_attendees

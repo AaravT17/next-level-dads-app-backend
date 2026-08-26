@@ -83,11 +83,14 @@ async def get_outgoing_requests(
 
 async def send_connection_request(
     conn: asyncpg.Connection,
-    curr_user_id: str,
-    target_user_id: str,
+    curr_user_id: UUID,
+    target_user_id: UUID,
 ) -> tuple[ConnectionStatusResponse, bool]:
-    """Returns (status_response, created). created=False means conflict."""
-    curr_user_id, target_user_id = UUID(curr_user_id), UUID(target_user_id)
+    """
+    Sends a connection request from the current user to the target user and returns (connection_status, created).
+    If created=False, there is already a connection request or a connection between the two users, and the existing
+    status is returned.
+    """
     try:
         res = await conn.fetchrow(
             """
@@ -146,11 +149,10 @@ async def send_connection_request(
 
 async def accept_connection_request(
     conn: asyncpg.Connection,
-    from_user_id: str,
-    curr_user_id: str,
+    from_user_id: UUID,
+    curr_user_id: UUID,
 ):
     try:
-        from_user_id, curr_user_id = UUID(from_user_id), UUID(curr_user_id)
         res = await conn.fetchrow(
             """
             UPDATE connections
@@ -177,11 +179,10 @@ async def accept_connection_request(
 
 async def remove_connection(
     conn: asyncpg.Connection,
-    curr_user_id: str,
-    target_user_id: str,
+    curr_user_id: UUID,
+    target_user_id: UUID,
 ):
     try:
-        curr_user_id, target_user_id = UUID(curr_user_id), UUID(target_user_id)
         await conn.execute(
             """
             WITH remove_connection AS (

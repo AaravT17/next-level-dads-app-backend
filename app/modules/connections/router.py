@@ -53,7 +53,7 @@ async def get_outgoing_requests(
 
 
 @router.post(
-    '/{user_id}',
+    '/{target_user_id}',
     response_model=ConnectionStatusResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(get_consented_user), Depends(SendConnectionRequestLimiter())]
@@ -61,30 +61,30 @@ async def get_outgoing_requests(
     else [Depends(get_consented_user)],
 )
 async def send_connection_request(
-    user_id: str,
+    target_user_id: UUID,
     request: Request,
     response: Response,
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    result, created = await connections_service.send_connection_request(conn, request.state.user_id, user_id)
+    result, created = await connections_service.send_connection_request(conn, UUID(request.state.user_id), target_user_id)
     if not created:
         response.status_code = status.HTTP_409_CONFLICT
     return result
 
 
-@router.patch('/{user_id}', status_code=status.HTTP_204_NO_CONTENT)
+@router.patch('/{from_user_id}', status_code=status.HTTP_204_NO_CONTENT)
 async def accept_connection_request(
-    user_id: str,
+    from_user_id: UUID,
     curr_user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    await connections_service.accept_connection_request(conn, user_id, curr_user_id)
+    await connections_service.accept_connection_request(conn, from_user_id, UUID(curr_user_id))
 
 
-@router.delete('/{user_id}', status_code=status.HTTP_204_NO_CONTENT)
+@router.delete('/{target_user_id}', status_code=status.HTTP_204_NO_CONTENT)
 async def remove_connection(
-    user_id: str,
+    target_user_id: UUID,
     curr_user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    await connections_service.remove_connection(conn, curr_user_id, user_id)
+    await connections_service.remove_connection(conn, UUID(curr_user_id), target_user_id)

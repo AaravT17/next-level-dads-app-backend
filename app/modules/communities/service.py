@@ -205,6 +205,44 @@ async def discover_communities(
         )
 
 
+async def create_community(
+    conn: asyncpg.Connection,
+    user_id: str,
+    name: str,
+    description: str | None,
+) -> str:
+    try:
+        user_id = UUID(user_id)
+        async with conn.transaction():
+            res = await conn.fetchrow(
+                """
+                INSERT INTO communities (name, description, created_by, created_at)
+                VALUES ($1, $2, $3, NOW())
+                RETURNING id
+                """,
+                name,
+                description,
+                user_id,
+            )
+            if not res:
+                raise Exception('Failed to create community.')
+            community_id = res['id']
+            await conn.execute(
+                """
+                INSERT INTO community_members (community_id, user_id, role, joined_at)
+                VALUES ($1, $2, 'admin', NOW())
+                """,
+                community_id,
+                user_id,
+            )
+        return str(community_id)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to create community. Please try again later.',
+        )
+
+
 async def get_community(
     conn: asyncpg.Connection,
     community_id: str,
@@ -257,62 +295,22 @@ async def get_user_communities(
     conn: asyncpg.Connection,
     user_id: str,
     name: str | None,
-    cursor_id: str | None,
+    cursor_id: UUID | None,
     cursor_created_at: datetime | None,
 ) -> list[CommunityResponse]:
     try:
         query, params = _build_get_user_communities_query(
             user_id=UUID(user_id),
             name=name,
-            cursor_id=UUID(cursor_id) if cursor_id else None,
+            cursor_id=cursor_id,
             cursor_created_at=cursor_created_at,
         )
         res = await conn.fetch(query, *params)
         return [CommunityResponse(**dict(r)) for r in res]
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Failed to fetch communities. Please try again later.',
-        )
-
-
-async def create_community(
-    conn: asyncpg.Connection,
-    user_id: str,
-    name: str,
-    description: str | None,
-) -> str:
-    try:
-        user_id = UUID(user_id)
-        async with conn.transaction():
-            res = await conn.fetchrow(
-                """
-                INSERT INTO communities (name, description, created_by, created_at)
-                VALUES ($1, $2, $3, NOW())
-                RETURNING id
-                """,
-                name,
-                description,
-                user_id,
-            )
-            if not res:
-                raise Exception('Failed to create community.')
-            community_id = res['id']
-            await conn.execute(
-                """
-                INSERT INTO community_members (community_id, user_id, role, joined_at)
-                VALUES ($1, $2, 'admin', NOW())
-                """,
-                community_id,
-                user_id,
-            )
-        return str(community_id)
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to create community. Please try again later.',
         )
 
 

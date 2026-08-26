@@ -37,8 +37,8 @@ async def login_user(credentials: LoginRequest, response: Response):
     response_model=LoginResponse,
     dependencies=[Depends(OAuthSessionLimiter())] if IS_PRODUCTION else [],
 )
-async def handle_oauth_session(credentials: OAuthSessionRequest, response: Response):
-    access_token = await auth_service.set_oauth_session(credentials.access_token, credentials.refresh_token, response)
+async def create_session_from_oauth(credentials: OAuthSessionRequest, response: Response):
+    access_token = await auth_service.create_session_from_oauth(credentials.access_token, credentials.refresh_token, response)
     return {'access_token': access_token}
 
 
@@ -51,9 +51,9 @@ async def logout_user(response: Response, access_token: str = Depends(get_curren
 @router.post(
     '/refresh', response_model=RefreshResponse, dependencies=[Depends(RefreshLimiter())] if IS_PRODUCTION else []
 )
-async def refresh_token(request: Request, response: Response):
-    token = request.cookies.get('refresh_token')
-    if not token:
+async def refresh_session(request: Request, response: Response):
+    refresh_token = request.cookies.get('refresh_token')
+    if not refresh_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Missing refresh token.')
-    access_token = await auth_service.refresh(token, response)
+    access_token = await auth_service.refresh_session(refresh_token, response)
     return {'access_token': access_token}

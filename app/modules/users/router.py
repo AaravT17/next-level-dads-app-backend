@@ -122,7 +122,7 @@ async def discover_profiles(
 @router.get('/me/communities', response_model=list[CommunityResponse])
 async def get_user_communities(
     name: str | None = Query(None),
-    cursor_id: str | None = Query(None),
+    cursor_id: UUID | None = Query(None),
     cursor_created_at: datetime | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_consented_user),
@@ -133,18 +133,12 @@ async def get_user_communities(
 @router.get('/me/events', response_model=list[EventResponse])
 async def get_user_events(
     name: str | None = Query(None),
-    cursor_id: str | None = Query(None),
+    cursor_id: UUID | None = Query(None),
     cursor_starts_at: datetime | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_consented_user),
 ):
-    return await events_service.get_user_events(
-        conn,
-        user_id,
-        name,
-        UUID(cursor_id) if cursor_id else None,
-        cursor_starts_at,
-    )
+    return await events_service.get_user_events(conn, user_id, name, cursor_id, cursor_starts_at)
 
 
 @router.patch(

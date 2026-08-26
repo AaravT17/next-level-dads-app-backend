@@ -312,8 +312,6 @@ async def delete_avatar(conn: asyncpg.Connection, user_id: str):
             UUID(user_id),
         )
         await _delete_avatar_from_storage(user_id)
-    except HTTPException:
-        raise
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -513,6 +511,12 @@ async def _upload_avatar_to_storage(user_id: str, file_contents: bytes, mime_typ
             file=file_contents,
             file_options={'content-type': mime_type, 'upsert': 'true'},
         )
+        # TODO: There is a small chance that the upload succeeds but the public URL retrieval fails. We should 
+        # handle this case and delete the uploaded file if the public URL retrieval fails. However, in that case,
+        # the issue is that we might delete the user's old file if they are updating their avatar, and this may
+        # leave a dangling reference in the DB. We need to think about how to handle this properly. Best approach
+        # may be to use random UUIDs for the file path (or perhaps /user_id/avatar_uuid) so that we can delete the 
+        # file if the public URL retrieval fails.
         return await supabase_admin.storage.from_('avatars').get_public_url(user_id)
     except Exception:
         raise HTTPException(

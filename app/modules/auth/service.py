@@ -52,7 +52,7 @@ async def login(email: str, password: str, response: Response) -> str:
     return res.session.access_token
 
 
-async def set_oauth_session(access_token: str, refresh_token: str, response: Response) -> str:
+async def create_session_from_oauth(access_token: str, refresh_token: str, response: Response) -> str:
     supabase = get_supabase()
     try:
         user = await supabase.auth.get_user(access_token)
@@ -80,7 +80,7 @@ async def logout(access_token: str, response: Response):
     _clear_refresh_cookie(response)
 
 
-async def refresh(refresh_token: str, response: Response) -> str:
+async def refresh_session(refresh_token: str, response: Response) -> str:
     supabase = get_supabase()
     try:
         res = await supabase.auth.refresh_session(refresh_token)
@@ -102,7 +102,7 @@ async def verify_token(token: str) -> str | None:
     supabase = get_supabase()
     try:
         res = await supabase.auth.get_user(token)
-        return res.user.id if res.user else None
+        return res.user.id if (res and res.user) else None
     except Exception:
         return None
 

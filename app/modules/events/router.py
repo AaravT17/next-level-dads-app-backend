@@ -5,6 +5,7 @@ from app.modules.events.models import EventResponse
 import app.modules.events.service as events_service
 from typing import Literal
 import asyncpg
+from uuid import UUID
 from datetime import datetime
 
 
@@ -29,7 +30,7 @@ async def discover_events(
 
 @router.get('/{id}', response_model=EventResponse)
 async def get_event(
-    id: str,
+    id: UUID,
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_consented_user),
 ):
@@ -38,7 +39,7 @@ async def get_event(
 
 @router.post('/{id}/attendees', status_code=status.HTTP_204_NO_CONTENT)
 async def register_for_event(
-    id: str,
+    id: UUID,
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_consented_user),
 ):
@@ -47,7 +48,7 @@ async def register_for_event(
 
 @router.delete('/{id}/attendees', status_code=status.HTTP_204_NO_CONTENT)
 async def unregister_from_event(
-    id: str,
+    id: UUID,
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_consented_user),
 ):
