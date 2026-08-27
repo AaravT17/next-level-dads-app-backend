@@ -18,6 +18,7 @@ import app.modules.communities.service as communities_service
 from app.modules.communities.models import (
     ConversationCreate,
     ConversationResponse,
+    FeedConversationResponse,
     MessageCreate,
     MessageResponse,
     ParticipantResponse,
@@ -185,6 +186,34 @@ conversations_router = APIRouter(
     prefix='/api/conversations',
     tags=['conversations'],
 )
+
+
+@conversations_router.get('', response_model=list[FeedConversationResponse])
+async def get_conversations_feed(
+    following: bool = Query(False),
+    cursor_id: str | None = Query(None),
+    cursor_created_at: datetime | None = Query(None),
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_consented_user),
+):
+    try:
+        records = await communities_service.list_feed_conversations(
+            conn,
+            UUID(user_id),
+            following=following,
+            cursor_id=UUID(cursor_id) if cursor_id else None,
+            cursor_created_at=cursor_created_at,
+        )
+        return [communities_service.record_to_feed_conversation(r) for r in records]
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch conversations. Please try again later.',
+        )
 
 
 @conversations_router.get('/{conversation_id}', response_model=ConversationResponse)

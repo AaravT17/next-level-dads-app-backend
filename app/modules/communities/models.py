@@ -59,6 +59,10 @@ class ConversationResponse(BaseModel):
     last_activity_at: datetime
 
 
+class FeedConversationResponse(ConversationResponse):
+    community_name: str
+
+
 class MessageCreate(BaseModel):
     body: str = Field(min_length=1, max_length=CONVERSATION_BODY_MAX_LENGTH)
 

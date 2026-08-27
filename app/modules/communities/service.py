@@ -14,6 +14,7 @@ from app.modules.communities.models import (
     CommunityResponse,
     AuthorInfo,
     ConversationResponse,
+    FeedConversationResponse,
     MessageResponse,
     ParticipantResponse,
     ReplyResponse,
@@ -99,6 +100,23 @@ _CONVERSATION_COLS = """
     AS reply_count,
     (SELECT COUNT(*) FROM conversation_hearts   ch  WHERE ch.conversation_id  = c.id) AS heart_count,
     (SELECT COUNT(*) FROM conversation_participants cp WHERE cp.conversation_id = c.id) AS participant_count
+"""
+
+# A conversation is readable when moderation has not filtered it, or when the only
+# filter came from a report -- those stay visible so the client can tombstone them.
+_CONVERSATION_VISIBLE_SQL = """
+    (
+        EXISTS (
+            SELECT 1 FROM moderation_filtered_messages mfm
+            WHERE mfm.content_type = 'conversation'
+              AND mfm.content_id = c.id
+              AND mfm.layer = 'report'
+        )
+        OR NOT EXISTS (
+            SELECT 1 FROM moderation_filtered_messages mfm
+            WHERE mfm.content_type = 'conversation' AND mfm.content_id = c.id
+        )
+    )
 """
 
 _TIME_WINDOW_SQL: dict[str, str] = {
@@ -407,22 +425,62 @@ async def list_conversations(
             FROM conversations c
             LEFT JOIN public.users u ON u.id = c.author_id
             WHERE c.community_id = $1
-            AND (
-                EXISTS (
-                    SELECT 1 FROM moderation_filtered_messages mfm
-                    WHERE mfm.content_type = 'conversation'
-                      AND mfm.content_id = c.id
-                      AND mfm.layer = 'report'
-                )
-                OR NOT EXISTS (
-                SELECT 1 FROM moderation_filtered_messages mfm
-                WHERE mfm.content_type = 'conversation' AND mfm.content_id = c.id
-            ))
+            AND {_CONVERSATION_VISIBLE_SQL}
             {time_filter}
         )
         SELECT * FROM convs
         {cursor_condition}
         ORDER BY {order_by}
+        LIMIT ${i}
+    """
+    params.append(CONVERSATIONS_PAGE_LIMIT)
+    return await conn.fetch(query, *params)
+
+
+async def list_feed_conversations(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    following: bool = False,
+    cursor_id: UUID | None = None,
+    cursor_created_at: datetime | None = None,
+) -> list[asyncpg.Record]:
+    """Newest-first conversations across every community, with the source community name.
+
+    Deleted rows are excluded: the per-community list keeps them as tombstones for
+    thread history, but in a cross-community feed they carry no context.
+    """
+    params: list = [user_id]
+    i = 2
+
+    # Membership is the only "following" relationship -- the same one /api/users/me/communities uses.
+    membership_join = (
+        'JOIN community_members cm ON cm.community_id = c.community_id AND cm.user_id = $1'
+        if following
+        else ''
+    )
+
+    cursor_condition = ''
+    if cursor_created_at and cursor_id:
+        cursor_condition = f'AND (c.created_at, c.id) < (${i}, ${i + 1})'
+        params.extend([cursor_created_at, cursor_id])
+        i += 2
+
+    query = f"""
+        SELECT
+            {_CONVERSATION_COLS},
+            comm.name AS community_name,
+            EXISTS (
+                SELECT 1 FROM conversation_hearts ch
+                WHERE ch.conversation_id = c.id AND ch.user_id = $1
+            ) AS is_hearted
+        FROM conversations c
+        LEFT JOIN public.users u ON u.id = c.author_id
+        JOIN communities comm ON comm.id = c.community_id
+        {membership_join}
+        WHERE NOT c.is_deleted
+        AND {_CONVERSATION_VISIBLE_SQL}
+        {cursor_condition}
+        ORDER BY c.created_at DESC, c.id DESC
         LIMIT ${i}
     """
     params.append(CONVERSATIONS_PAGE_LIMIT)
@@ -444,17 +502,7 @@ async def get_conversation(
         FROM conversations c
         LEFT JOIN public.users u ON u.id = c.author_id
         WHERE c.id = $1
-        AND (
-            EXISTS (
-                SELECT 1 FROM moderation_filtered_messages mfm
-                WHERE mfm.content_type = 'conversation'
-                  AND mfm.content_id = c.id
-                  AND mfm.layer = 'report'
-            )
-            OR NOT EXISTS (
-            SELECT 1 FROM moderation_filtered_messages mfm
-            WHERE mfm.content_type = 'conversation' AND mfm.content_id = c.id
-        ))
+        AND {_CONVERSATION_VISIBLE_SQL}
     """
     return await conn.fetchrow(query, conversation_id, user_id)
 
@@ -754,6 +802,14 @@ def record_to_conversation(record: asyncpg.Record) -> ConversationResponse:
         created_at=record['created_at'],
         updated_at=record['updated_at'],
         last_activity_at=record['last_activity_at'],
+    )
+
+
+def record_to_feed_conversation(record: asyncpg.Record) -> FeedConversationResponse:
+    conversation = record_to_conversation(record)
+    return FeedConversationResponse(
+        **conversation.model_dump(),
+        community_name=record["community_name"],
     )
 
 
