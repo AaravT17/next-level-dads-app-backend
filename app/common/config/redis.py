@@ -20,9 +20,9 @@ def get_redis() -> redis.Redis:
     return redis_client
 
 
-async def publish(user_id: str, msg: dict):
+async def publish(channel: str, event: dict):
     # publishing is handled by the redis client, subscribing and listening is handled by the pubsub client
-    await redis_client.publish(channel=f'messages:{user_id}', message=json.dumps(msg))
+    await redis_client.publish(channel, json.dumps(event))
 
 
 async def close_redis():
