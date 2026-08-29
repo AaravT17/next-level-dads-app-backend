@@ -187,30 +187,50 @@ Two connections arriving simultaneously could both run the DB query + Lock 2. Th
 
 Test setup: 1 sender, 3 uvicorn workers, local Redis, remote Supabase DB. 100 measured rounds per test, 5 warmup rounds discarded.
 
-### Client-Side Fan-out Latency (POST send → last WS receive)
+### Server-Side Fan-Out Latency (publish → last ws.send_json completes)
 
 **500 connections:**
 
 | Metric | Per-User | Per-Chat | Speedup |
 | ------ | -------- | -------- | ------- |
-| p50    | 401.9ms  | 191.2ms  | 2.1x    |
-| p95    | 543.7ms  | 222.6ms  | 2.4x    |
-| p99    | 763.3ms  | 322.6ms  | 2.4x    |
+| p50    | 222.4ms  | 19.3ms   | 11.5×   |
+| p95    | 309.8ms  | 24.3ms   | 12.7×   |
+| p99    | 318.6ms  | 28.9ms   | 11.0×   |
 
 **1000 connections:**
 
 | Metric | Per-User | Per-Chat | Speedup |
 | ------ | -------- | -------- | ------- |
-| p50    | 581.5ms  | 236.1ms  | 2.5x    |
-| p95    | 771.5ms  | 276.7ms  | 2.8x    |
-| p99    | 860.5ms  | 442.8ms  | 1.9x    |
+| p50    | 368.3ms  | 35.4ms   | 10.4×   |
+| p95    | 458.4ms  | 56.9ms   | 8.1×    |
+| p99    | 466.1ms  | 137.2ms  | 3.4×    |
 
-Per-chat scales better — going from 500 to 1000 connections only adds ~45ms at p50 (191→236), while per-user adds ~180ms (402→582). The gap widens at higher connection counts.
+### End-to-End Delivery Latency (POST send → last WS receive)
+
+**500 connections:**
+
+| Metric | Per-User | Per-Chat | Speedup |
+| ------ | -------- | -------- | ------- |
+| p50    | 350.0ms  | 138.8ms  | 2.5×    |
+| p95    | 440.7ms  | 196.1ms  | 2.2×    |
+| p99    | 530.5ms  | 252.1ms  | 2.1×    |
+
+**1000 connections:**
+
+| Metric | Per-User | Per-Chat | Speedup |
+| ------ | -------- | -------- | ------- |
+| p50    | 518.5ms  | 184.4ms  | 2.8×    |
+| p95    | 627.9ms  | 243.2ms  | 2.6×    |
+| p99    | 660.2ms  | 325.3ms  | 2.0×    |
 
 ### Summary
 
-| Metric                | Improvement     |
-| --------------------- | --------------- |
-| Fan-out latency (p50) | 2.1–2.5x faster |
-| Fan-out latency (p95) | 2.4–2.8x faster |
-| Redis publishes/msg   | O(n) → O(1)     |
+| Metric                     | Improvement      |
+| -------------------------- | ---------------- |
+| Server fan-out latency p50 | 10–12× faster    |
+| Server fan-out latency p95 | 8–13× faster     |
+| Server fan-out latency p99 | 3–11× faster     |
+| E2E delivery latency p50   | 2.5–2.8× faster  |
+| E2E delivery latency p95   | 2.2–2.6× faster  |
+| E2E delivery latency p99   | 2.0–2.1× faster  |
+| Redis publishes/msg        | O(n) → O(1)      |
