@@ -45,6 +45,10 @@ CONVERSATIONS_PAGE_LIMIT = 10
 RESUME_PAGE_LIMIT = 10
 MESSAGES_PAGE_LIMIT = 10
 REPLIES_PAGE_LIMIT = 5
+# One invite fans out to one DM per recipient, so the cap is what keeps a single
+# tap from becoming a broadcast. Ten is a handful of friends, not a mailing list.
+COMMUNITY_INVITE_MAX_RECIPIENTS = 10
+COMMUNITY_INVITE_MESSAGE = "Check out this community. I think you'd enjoy it!"
 
 # --- Chats ---
 CHAT_PREVIEWS_PAGE_LIMIT = 20

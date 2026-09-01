@@ -83,6 +83,10 @@ def PostReplyLimiter():
     return RateLimiter(times=60, minutes=1, identifier=user_id_key, callback=rate_limit_exceeded_callback)
 
 
+def InviteToCommunityLimiter():
+    return RateLimiter(times=20, hours=1, identifier=user_id_key, callback=rate_limit_exceeded_callback)
+
+
 # --- Chats ---
 def CreateChatLimiter():
     return RateLimiter(times=10, minutes=1, identifier=user_id_key, callback=rate_limit_exceeded_callback)

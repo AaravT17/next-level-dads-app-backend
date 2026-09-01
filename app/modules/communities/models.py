@@ -1,9 +1,10 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from uuid import UUID
 from datetime import datetime
 from app.common.config.constants import (
     COMMUNITY_NAME_MAX_LENGTH,
     COMMUNITY_DESCRIPTION_MAX_LENGTH,
+    COMMUNITY_INVITE_MAX_RECIPIENTS,
     CONVERSATION_TITLE_MIN_LENGTH,
     CONVERSATION_TITLE_MAX_LENGTH,
     CONVERSATION_BODY_MAX_LENGTH,
@@ -119,3 +120,21 @@ class ParticipantResponse(BaseModel):
     avatar_url: str | None = None
     first_joined_at: datetime
     last_active_at: datetime
+
+
+class CommunityInviteRequest(BaseModel):
+    recipient_ids: list[UUID] = Field(
+        ..., min_length=1, max_length=COMMUNITY_INVITE_MAX_RECIPIENTS
+    )
+
+    @field_validator("recipient_ids", mode="before")
+    def deduplicate_recipient_ids(cls, recipient_ids: list[UUID]):
+        # Selecting the same person twice is a client slip, not a request for two
+        # invites — dedupe before the length cap so it cannot be used to inflate it.
+        if not isinstance(recipient_ids, list):
+            return recipient_ids
+        return list(dict.fromkeys(recipient_ids))
+
+
+class CommunityInviteResponse(BaseModel):
+    invited_count: int = Field(ge=0)

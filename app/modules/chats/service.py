@@ -23,6 +23,7 @@ from app.modules.chats.models import (
     ChatParticipantResponse,
     AddParticipantsRequest,
     ChatAddableParticipantResponse,
+    SharedCommunityResponse,
 )
 
 
@@ -54,6 +55,23 @@ def _build_chat_preview_row(r) -> ChatResponse:
         last_read_at=r['last_read_at'],
         last_message=last_message,
         other_user=other_user,
+    )
+
+
+
+def _build_shared_community(r) -> SharedCommunityResponse | None:
+    """The community card on an invite message, or None when there isn't one.
+
+    A deleted message keeps its row but shows as "Message deleted", so the card
+    is withheld too — otherwise deleting an invite would leave the link standing.
+    """
+    if r['shared_community_id'] is None or r['is_deleted']:
+        return None
+    return SharedCommunityResponse(
+        id=r['shared_community_id'],
+        name=r['shared_community_name'],
+        description=r['shared_community_description'],
+        member_count=r['shared_community_member_count'] or 0,
     )
 
 
@@ -255,11 +273,17 @@ async def get_messages(
             r.content AS reply_to_content,
             r.sender_id AS reply_to_sender_id,
             rs.name AS reply_to_sender_name,
-            r.is_deleted AS reply_to_is_deleted
+            r.is_deleted AS reply_to_is_deleted,
+            m.shared_community_id,
+            sc.name AS shared_community_name,
+            sc.description AS shared_community_description,
+            (SELECT COUNT(*) FROM community_members cm WHERE cm.community_id = sc.id)
+                AS shared_community_member_count
         FROM messages m
         LEFT JOIN users s ON s.id = m.sender_id
         LEFT JOIN messages r ON r.id = m.reply_to_id
         LEFT JOIN users rs ON rs.id = r.sender_id
+        LEFT JOIN communities sc ON sc.id = m.shared_community_id
         WHERE {where_clause}
         ORDER BY m.created_at DESC, m.id DESC
         LIMIT ${i}
@@ -311,6 +335,7 @@ async def get_messages(
                 sender_avatar_url=r['sender_avatar_url'],
                 content='' if r['is_deleted'] else r['content'],
                 reply_to=reply_to,
+                shared_community=_build_shared_community(r),
                 edited_at=r['edited_at'],
                 is_deleted=r['is_deleted'],
                 created_at=r['created_at'],
@@ -1005,3 +1030,122 @@ async def mark_chat_read(conn: asyncpg.Connection, user_id: str, chat_id: str) -
         user_id,
         chat_id,
     )
+
+
+async def _get_or_create_dm(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    other_user_id: UUID,
+) -> UUID:
+    """The DM between two users, created on first use.
+
+    Runs inside a savepoint so the losing side of a concurrent create can fall
+    back to the existing row without aborting the caller's transaction.
+    """
+    chat_id = await conn.fetchval(
+        """
+        SELECT id FROM chats
+        WHERE type = 'dm'
+          AND LEAST(dm_user_1, dm_user_2) = LEAST($1::uuid, $2::uuid)
+          AND GREATEST(dm_user_1, dm_user_2) = GREATEST($1::uuid, $2::uuid)
+        """,
+        user_id,
+        other_user_id,
+    )
+    if chat_id is not None:
+        return chat_id
+
+    try:
+        async with conn.transaction():
+            chat_id = await conn.fetchval(
+                "INSERT INTO chats (type, dm_user_1, dm_user_2) VALUES ('dm', $1, $2) RETURNING id",
+                user_id,
+                other_user_id,
+            )
+            await conn.executemany(
+                'INSERT INTO chat_participants (chat_id, user_id) VALUES ($1, $2)',
+                [(chat_id, user_id), (chat_id, other_user_id)],
+            )
+        return chat_id
+    except asyncpg.UniqueViolationError:
+        return await conn.fetchval(
+            """
+            SELECT id FROM chats
+            WHERE type = 'dm'
+              AND LEAST(dm_user_1, dm_user_2) = LEAST($1::uuid, $2::uuid)
+              AND GREATEST(dm_user_1, dm_user_2) = GREATEST($1::uuid, $2::uuid)
+            """,
+            user_id,
+            other_user_id,
+        )
+
+
+async def send_community_invites(
+    conn: asyncpg.Connection,
+    sender_id: UUID,
+    recipient_ids: list[UUID],
+    community: SharedCommunityResponse,
+    content: str,
+) -> list[UUID]:
+    """Drop one invite message into the sender's DM with each recipient.
+
+    All of it in one transaction: an invite that reaches four of five friends is
+    worse than one that fails outright, because the sender cannot tell which.
+    Callers are responsible for validating the recipients and the community.
+    """
+    # Read before writing: the publish below needs it, and a failure here should
+    # cost nothing. After the commit there is no honest way to fail the request.
+    try:
+        sender = await conn.fetchrow('SELECT name, avatar_url FROM users WHERE id = $1', sender_id)
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to send invites. Please try again later.',
+        )
+
+    sent: list[tuple[UUID, UUID, UUID, datetime]] = []
+    try:
+        async with conn.transaction():
+            for recipient_id in recipient_ids:
+                chat_id = await _get_or_create_dm(conn, sender_id, recipient_id)
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO messages (chat_id, sender_id, content, shared_community_id)
+                    VALUES ($1, $2, $3, $4)
+                    RETURNING id, created_at
+                    """,
+                    chat_id,
+                    sender_id,
+                    content,
+                    community.id,
+                )
+                sent.append((recipient_id, chat_id, row['id'], row['created_at']))
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to send invites. Please try again later.',
+        )
+
+    # Published only after the transaction commits, so a recipient that reacts by
+    # fetching the chat cannot beat the rows it is fetching.
+    for recipient_id, chat_id, message_id, created_at in sent:
+        msg = MessageResponse(
+            id=message_id,
+            chat_id=chat_id,
+            sender_id=sender_id,
+            sender_name=sender['name'] if sender else None,
+            sender_avatar_url=sender['avatar_url'] if sender else None,
+            content=content,
+            shared_community=community,
+            is_deleted=False,
+            created_at=created_at,
+        )
+        asyncio.create_task(
+            _publish_event(
+                publish_to=[recipient_id],
+                type='messages:new',
+                payload=msg.model_dump(mode='json'),
+            )
+        )
+
+    return [chat_id for _, chat_id, _, _ in sent]

@@ -10,6 +10,7 @@ from app.common.config.constants import (
     RESUME_PAGE_LIMIT,
     MESSAGES_PAGE_LIMIT,
     REPLIES_PAGE_LIMIT,
+    COMMUNITY_INVITE_MESSAGE,
 )
 from app.modules.communities.models import (
     CommunityResponse,
@@ -22,6 +23,8 @@ from app.modules.communities.models import (
     ReplyResponse,
 )
 from app.modules.users.models import CommunityMemberResponse
+from app.modules.chats.models import SharedCommunityResponse
+import app.modules.chats.service as chats_service
 
 
 REMOVED_CONVERSATION_TITLE = 'Removed post'
@@ -1271,3 +1274,75 @@ def _build_get_community_members_query(
     params.append(PROFILES_PAGE_LIMIT)
 
     return query, params
+
+
+async def invite_to_community(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    community_id: UUID,
+    recipient_ids: list[UUID],
+) -> int:
+    """Send each recipient a DM inviting them to a community.
+
+    The invite carries no state of its own — it is a message with the community
+    attached, and the recipient joins from the community page like anyone else.
+    Recipients must be accepted connections, which also rules out inviting
+    yourself and inviting a user that does not exist.
+    """
+    try:
+        community = await conn.fetchrow(
+            """
+            SELECT
+                c.id,
+                c.name,
+                c.description,
+                (SELECT COUNT(*) FROM community_members cm WHERE cm.community_id = c.id) AS member_count
+            FROM communities c
+            WHERE c.id = $1
+            """,
+            community_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to send invites. Please try again later.',
+        )
+
+    if community is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Community not found.')
+
+    try:
+        connections = await conn.fetch(
+            """
+            SELECT (CASE WHEN requesting_id = $1 THEN requested_id ELSE requesting_id END) AS user_id
+            FROM connections
+            WHERE (requesting_id = $1 OR requested_id = $1) AND status = 'accepted'
+            """,
+            user_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to send invites. Please try again later.',
+        )
+
+    connected_ids = {r['user_id'] for r in connections}
+    if any(rid not in connected_ids for rid in recipient_ids):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='You can only invite users with whom you are connected',
+        )
+
+    chat_ids = await chats_service.send_community_invites(
+        conn,
+        sender_id=user_id,
+        recipient_ids=recipient_ids,
+        community=SharedCommunityResponse(
+            id=community['id'],
+            name=community['name'],
+            description=community['description'],
+            member_count=community['member_count'] or 0,
+        ),
+        content=COMMUNITY_INVITE_MESSAGE,
+    )
+    return len(chat_ids)

@@ -3,6 +3,7 @@ from app.common.config.constants import IS_PRODUCTION
 from app.common.dependencies.rate_limiting import (
     CreateCommunityLimiter,
     CreateConversationLimiter,
+    InviteToCommunityLimiter,
     PostMessageLimiter,
     PostReplyLimiter,
 )
@@ -16,6 +17,8 @@ from app.modules.moderation.service import assert_not_banned, moderate_content
 import asyncpg
 import app.modules.communities.service as communities_service
 from app.modules.communities.models import (
+    CommunityInviteRequest,
+    CommunityInviteResponse,
     ConversationCreate,
     ConversationResponse,
     FeedConversationResponse,
@@ -98,6 +101,34 @@ async def leave_community(
     user_id: str = Depends(get_consented_user),
 ):
     await communities_service.leave_community(conn, id, user_id)
+
+
+@router.post(
+    '/{id}/invites',
+    response_model=CommunityInviteResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(get_consented_user), Depends(InviteToCommunityLimiter())]
+    if IS_PRODUCTION
+    else [Depends(get_consented_user)],
+)
+async def invite_to_community(
+    id: str,
+    body: CommunityInviteRequest,
+    request: Request,
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    try:
+        community_id = UUID(id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid community id.')
+
+    invited_count = await communities_service.invite_to_community(
+        conn,
+        UUID(request.state.user_id),
+        community_id,
+        body.recipient_ids,
+    )
+    return CommunityInviteResponse(invited_count=invited_count)
 
 
 @router.get('/{community_id}/conversations', response_model=list[ConversationResponse])

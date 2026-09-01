@@ -184,18 +184,22 @@ CREATE INDEX ON chat_participants (user_id);
 -- ── Messages ──────────────────────────────────────────────────────────────────
 
 CREATE TABLE messages (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    chat_id     UUID REFERENCES chats(id) ON DELETE CASCADE,
-    sender_id   UUID REFERENCES users(id) ON DELETE SET NULL,
-    reply_to_id UUID REFERENCES messages(id) ON DELETE SET NULL,
-    content     TEXT NOT NULL,
-    edited_at   TIMESTAMPTZ,
-    is_deleted  BOOLEAN DEFAULT false,
-    created_at  TIMESTAMPTZ DEFAULT now()
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    chat_id             UUID REFERENCES chats(id) ON DELETE CASCADE,
+    sender_id           UUID REFERENCES users(id) ON DELETE SET NULL,
+    reply_to_id         UUID REFERENCES messages(id) ON DELETE SET NULL,
+    content             TEXT NOT NULL,
+    -- Set only on a community invite. The message renders as a card linking to
+    -- the community; the recipient joins from there, so there is no invite state.
+    shared_community_id UUID REFERENCES communities(id) ON DELETE SET NULL,
+    edited_at           TIMESTAMPTZ,
+    is_deleted          BOOLEAN DEFAULT false,
+    created_at          TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE INDEX ON messages (chat_id, created_at);
 CREATE INDEX ON messages (reply_to_id);
+CREATE INDEX ON messages (shared_community_id) WHERE shared_community_id IS NOT NULL;
 
 CREATE OR REPLACE FUNCTION bump_chat_updated_at()
 RETURNS TRIGGER AS $$
