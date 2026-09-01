@@ -85,6 +85,7 @@ async def send_connection_request(
     conn: asyncpg.Connection,
     curr_user_id: UUID,
     target_user_id: UUID,
+    note: str | None = None,
 ) -> tuple[ConnectionStatusResponse, bool]:
     """
     Sends a connection request from the current user to the target user and returns (connection_status, created).
@@ -94,13 +95,14 @@ async def send_connection_request(
     try:
         res = await conn.fetchrow(
             """
-            INSERT INTO connections (requesting_id, requested_id, status)
-            VALUES ($1, $2, 'pending')
+            INSERT INTO connections (requesting_id, requested_id, status, note)
+            VALUES ($1, $2, 'pending', $3)
             ON CONFLICT DO NOTHING
             RETURNING requesting_id, status
             """,
             curr_user_id,
             target_user_id,
+            note,
         )
 
         if not res:
@@ -271,7 +273,7 @@ def _build_get_incoming_requests_query(
 
     where_clause = ' AND '.join(conditions)
     query = f"""
-        SELECT u.*, c.id AS connection_id, c.updated_at AS connection_updated_at, 'pending_incoming' AS connection_status
+        SELECT u.*, c.id AS connection_id, c.updated_at AS connection_updated_at, c.note, 'pending_incoming' AS connection_status
         FROM connections c
         JOIN user_profiles u ON u.id = c.requesting_id
         WHERE {where_clause}
@@ -305,7 +307,7 @@ def _build_get_outgoing_requests_query(
 
     where_clause = ' AND '.join(conditions)
     query = f"""
-        SELECT u.*, c.id AS connection_id, c.updated_at AS connection_updated_at, 'pending_outgoing' AS connection_status
+        SELECT u.*, c.id AS connection_id, c.updated_at AS connection_updated_at, c.note, 'pending_outgoing' AS connection_status
         FROM connections c
         JOIN user_profiles u ON u.id = c.requested_id
         WHERE {where_clause}

@@ -27,6 +27,10 @@ AGE_RANGES = {
 MAX_NAME_LENGTH = 100
 MAX_CITY_LENGTH = 100
 MAX_BIO_LENGTH = 500
+
+# Optional note on a connection request. Short on purpose: it is an
+# introduction to help the recipient decide, not the conversation itself.
+CONNECTION_NOTE_MAX_LENGTH = 300
 PROFILES_PAGE_LIMIT = 20
 
 # --- Communities ---

@@ -77,10 +77,12 @@ CREATE TABLE connections (
     requesting_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     requested_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     status        TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'blocked')),
+    note          TEXT,
     created_at    TIMESTAMPTZ DEFAULT now(),
     updated_at    TIMESTAMPTZ DEFAULT now(),
 
-    CONSTRAINT no_self_connection CHECK (requesting_id != requested_id)
+    CONSTRAINT no_self_connection CHECK (requesting_id != requested_id),
+    CONSTRAINT connection_note_length CHECK (note IS NULL OR char_length(note) <= 300)
 );
 
 CREATE UNIQUE INDEX unique_pair ON connections (
