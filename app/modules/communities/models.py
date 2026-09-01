@@ -63,6 +63,19 @@ class FeedConversationResponse(ConversationResponse):
     community_name: str
 
 
+# Why a conversation appears in "get back into it". Ordered by precedence:
+# authoring a thread is a stronger stake than replying, which is stronger than
+# hearting. The client renders these verbatim, so the set is closed.
+ResumeReason = Literal['authored', 'replied', 'hearted']
+
+
+class ResumeConversationResponse(FeedConversationResponse):
+    reason: ResumeReason
+    # Replies added by other people since the caller last acted on the thread.
+    # Zero is meaningful: the card then shows the reason alone.
+    unseen_reply_count: int
+
+
 class MessageCreate(BaseModel):
     body: str = Field(min_length=1, max_length=CONVERSATION_BODY_MAX_LENGTH)
 

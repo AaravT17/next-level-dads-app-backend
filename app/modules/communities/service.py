@@ -7,6 +7,7 @@ from app.common.config.constants import (
     COMMUNITIES_PAGE_LIMIT,
     PROFILES_PAGE_LIMIT,
     CONVERSATIONS_PAGE_LIMIT,
+    RESUME_PAGE_LIMIT,
     MESSAGES_PAGE_LIMIT,
     REPLIES_PAGE_LIMIT,
 )
@@ -15,6 +16,7 @@ from app.modules.communities.models import (
     AuthorInfo,
     ConversationResponse,
     FeedConversationResponse,
+    ResumeConversationResponse,
     MessageResponse,
     ParticipantResponse,
     ReplyResponse,
@@ -487,6 +489,94 @@ async def list_feed_conversations(
     return await conn.fetch(query, *params)
 
 
+async def list_resume_conversations(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    limit: int = RESUME_PAGE_LIMIT,
+) -> list[asyncpg.Record]:
+    """Conversations the caller has a stake in, most recently active first.
+
+    A stake is authoring the thread, replying in it, or hearting it. Ordering is
+    by the thread's activity rather than by when the caller acted, because the
+    point of the section is what moved since they last looked -- a thread they
+    posted in a month ago belongs at the top if it got a reply this morning.
+
+    `unseen_reply_count` counts other people's messages added after the caller's
+    own last action on the thread. It uses the same moderation visibility as
+    reply_count so a card cannot promise more replies than the thread will show.
+    """
+    query = f"""
+        SELECT
+            {_CONVERSATION_COLS},
+            comm.name AS community_name,
+            EXISTS (
+                SELECT 1 FROM conversation_hearts ch
+                WHERE ch.conversation_id = c.id AND ch.user_id = $1
+            ) AS is_hearted,
+            CASE
+                WHEN c.author_id = $1 THEN 'authored'
+                WHEN mine.last_message_at IS NOT NULL THEN 'replied'
+                ELSE 'hearted'
+            END AS reason,
+            (
+                SELECT COUNT(*)
+                FROM conversation_messages m2
+                WHERE m2.conversation_id = c.id
+                  AND m2.author_id IS DISTINCT FROM $1
+                  AND NOT m2.is_deleted
+                  AND m2.created_at > mine.acted_at
+                  AND (
+                      EXISTS (
+                          SELECT 1 FROM moderation_filtered_messages mfm
+                          WHERE mfm.content_type = 'message'
+                            AND mfm.content_id = m2.id
+                            AND mfm.layer = 'report'
+                      )
+                      OR NOT EXISTS (
+                          SELECT 1 FROM moderation_filtered_messages mfm
+                          WHERE mfm.content_type = 'message' AND mfm.content_id = m2.id
+                      )
+                  )
+            ) AS unseen_reply_count
+        FROM conversations c
+        LEFT JOIN public.users u ON u.id = c.author_id
+        JOIN communities comm ON comm.id = c.community_id
+        CROSS JOIN LATERAL (
+            SELECT
+                (
+                    SELECT MAX(m.created_at) FROM conversation_messages m
+                    WHERE m.conversation_id = c.id AND m.author_id = $1
+                ) AS last_message_at,
+                -- GREATEST ignores NULLs in Postgres, so this is simply the most
+                -- recent of whichever stakes the caller actually has.
+                GREATEST(
+                    CASE WHEN c.author_id = $1 THEN c.created_at END,
+                    (
+                        SELECT MAX(m.created_at) FROM conversation_messages m
+                        WHERE m.conversation_id = c.id AND m.author_id = $1
+                    ),
+                    (
+                        SELECT ch.created_at FROM conversation_hearts ch
+                        WHERE ch.conversation_id = c.id AND ch.user_id = $1
+                    )
+                ) AS acted_at
+        ) AS mine
+        WHERE NOT c.is_deleted
+        AND {_CONVERSATION_VISIBLE_SQL}
+        AND (
+            c.author_id = $1
+            OR mine.last_message_at IS NOT NULL
+            OR EXISTS (
+                SELECT 1 FROM conversation_hearts ch
+                WHERE ch.conversation_id = c.id AND ch.user_id = $1
+            )
+        )
+        ORDER BY c.last_activity_at DESC, c.id DESC
+        LIMIT $2
+    """
+    return await conn.fetch(query, user_id, limit)
+
+
 async def get_conversation(
     conn: asyncpg.Connection,
     conversation_id: UUID,
@@ -810,6 +900,15 @@ def record_to_feed_conversation(record: asyncpg.Record) -> FeedConversationRespo
     return FeedConversationResponse(
         **conversation.model_dump(),
         community_name=record["community_name"],
+    )
+
+
+def record_to_resume_conversation(record: asyncpg.Record) -> ResumeConversationResponse:
+    feed = record_to_feed_conversation(record)
+    return ResumeConversationResponse(
+        **feed.model_dump(),
+        reason=record['reason'],
+        unseen_reply_count=record['unseen_reply_count'],
     )
 
 

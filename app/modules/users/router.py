@@ -1,5 +1,6 @@
 from fastapi import (
     APIRouter,
+    HTTPException,
     Depends,
     File,
     Form,
@@ -9,7 +10,13 @@ from fastapi import (
     status,
     Request,
 )
-from app.common.config.constants import IS_PRODUCTION, MAX_NAME_LENGTH, MAX_CITY_LENGTH, MAX_BIO_LENGTH
+from app.common.config.constants import (
+    IS_PRODUCTION,
+    MAX_NAME_LENGTH,
+    MAX_CITY_LENGTH,
+    MAX_BIO_LENGTH,
+    RESUME_PAGE_LIMIT,
+)
 from app.common.dependencies.rate_limiting import (
     CreateProfileLimiter,
     DiscoverProfilesLimiter,
@@ -18,7 +25,7 @@ from app.common.dependencies.rate_limiting import (
 )
 from app.common.dependencies.auth import get_current_user, get_consented_user
 from app.modules.users.models import MeResponse, UserProfileResponse, UserStatsResponse, UpdatePreferencesRequest
-from app.modules.communities.models import CommunityResponse
+from app.modules.communities.models import CommunityResponse, ResumeConversationResponse
 from app.modules.events.models import EventResponse
 import app.modules.users.service as users_service
 from app.common.dependencies.db import get_db
@@ -128,6 +135,33 @@ async def get_user_communities(
     user_id: str = Depends(get_consented_user),
 ):
     return await communities_service.get_user_communities(conn, user_id, name, cursor_id, cursor_created_at)
+
+
+@router.get('/me/conversations', response_model=list[ResumeConversationResponse])
+async def get_user_conversations(
+    limit: int = Query(RESUME_PAGE_LIMIT, ge=1, le=RESUME_PAGE_LIMIT),
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_consented_user),
+):
+    """Threads the caller has a stake in, for Home's "get back into it" rail.
+
+    Not paginated: the rail is a fixed shelf, and the feed below it is the
+    browse surface. `limit` is capped so it cannot be used as one.
+    """
+    try:
+        records = await communities_service.list_resume_conversations(
+            conn, UUID(user_id), limit=limit
+        )
+        return [communities_service.record_to_resume_conversation(r) for r in records]
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch your conversations. Please try again later.',
+        )
 
 
 @router.get('/me/events', response_model=list[EventResponse])
