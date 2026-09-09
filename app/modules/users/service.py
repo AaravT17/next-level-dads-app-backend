@@ -2,6 +2,7 @@ import json
 import asyncpg
 from fastapi import HTTPException, status
 from app.common.config.supabase import get_supabase_admin
+from app.common.utils.errors import value_error_to_http
 from app.common.config.constants import AGE_RANGES, IMAGE_MIME_TO_EXT, PROFILES_PAGE_LIMIT
 from app.modules.users.models import MeResponse, UserProfileResponse, UserStatsResponse
 from app.modules.connections.utils import resolve_connection_status
@@ -193,8 +194,8 @@ async def discover_profiles(
             )
             for r in res
         ]
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
+    except ValueError as e:
+        raise value_error_to_http(e, 'Failed to fetch profiles. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

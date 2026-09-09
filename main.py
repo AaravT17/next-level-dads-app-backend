@@ -53,11 +53,24 @@ async def lifespan(app: FastAPI):
     await app.state.pool.close()
 
 
-app = FastAPI(lifespan=lifespan)
+# The interactive docs enumerate every route and schema, including the admin and
+# moderation surfaces. Useful locally, not something to publish.
+app = FastAPI(
+    lifespan=lifespan,
+    docs_url=None if IS_PRODUCTION else '/docs',
+    redoc_url=None if IS_PRODUCTION else '/redoc',
+    openapi_url=None if IS_PRODUCTION else '/openapi.json',
+)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[os.getenv('FRONTEND_BASE_URL')],
+    # Dev only. Loopback has three spellings -- localhost, 127.0.0.1 and [::1] --
+    # and which one the browser sends as Origin depends on how the page was
+    # opened, not on any choice the app makes. Pinning to a single spelling
+    # rejects the other two as cross-origin. Production stays pinned to
+    # FRONTEND_BASE_URL, where the origin is a real host and not ambiguous.
+    allow_origin_regex=None if IS_PRODUCTION else r'http://(localhost|127\.0\.0\.1|\[::1\]):\d+',
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],

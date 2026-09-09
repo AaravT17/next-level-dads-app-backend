@@ -154,12 +154,22 @@ async def accept_connection_request(
     from_user_id: UUID,
     curr_user_id: UUID,
 ):
+    """Accept a pending request addressed to the caller.
+
+    The status predicate matters twice. `unique_pair` means one row per pair, so
+    without it this also matches a 'blocked' row and would turn the accept
+    endpoint into an unblock the moment a block feature exists. It also stops an
+    already-accepted row being re-stamped: `updated_at` is the sort key for
+    get_connections, so a repeated PATCH would otherwise let anyone push
+    themselves to the top of someone else's connection list and disturb that
+    list's keyset cursor mid-page.
+    """
     try:
         res = await conn.fetchrow(
             """
             UPDATE connections
             SET status = 'accepted', updated_at = NOW()
-            WHERE requesting_id = $1 AND requested_id = $2
+            WHERE requesting_id = $1 AND requested_id = $2 AND status = 'pending'
             RETURNING requesting_id, status
             """,
             from_user_id,

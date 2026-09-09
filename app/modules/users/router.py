@@ -12,11 +12,13 @@ from fastapi import (
 )
 from app.common.config.constants import (
     IS_PRODUCTION,
+    MAX_IMAGE_UPLOAD_BYTES,
     MAX_NAME_LENGTH,
     MAX_CITY_LENGTH,
     MAX_BIO_LENGTH,
     RESUME_PAGE_LIMIT,
 )
+from app.common.utils.uploads import assert_image_contents, read_capped_upload
 from app.common.dependencies.rate_limiting import (
     CreateProfileLimiter,
     DiscoverProfilesLimiter,
@@ -28,6 +30,7 @@ from app.modules.users.models import MeResponse, UserProfileResponse, UserStatsR
 from app.modules.communities.models import CommunityResponse, ResumeConversationResponse
 from app.modules.events.models import EventResponse
 import app.modules.users.service as users_service
+from app.common.utils.errors import value_error_to_http
 from app.common.dependencies.db import get_db
 import asyncpg
 from datetime import datetime, date
@@ -81,8 +84,9 @@ async def create_profile(
     file_contents: bytes | None = None
     mime_type: str | None = None
     if avatar:
-        file_contents = await avatar.read()
+        file_contents = await read_capped_upload(request, avatar, MAX_IMAGE_UPLOAD_BYTES)
         mime_type = avatar.content_type
+        assert_image_contents(file_contents, mime_type, 'avatar')
 
     return await users_service.create_profile(
         conn,
@@ -156,7 +160,7 @@ async def get_user_conversations(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to fetch your conversations. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -210,8 +214,9 @@ async def update_avatar(
     avatar: UploadFile = File(...),
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    file_contents = await avatar.read()
+    file_contents = await read_capped_upload(request, avatar, MAX_IMAGE_UPLOAD_BYTES)
     mime_type = avatar.content_type
+    assert_image_contents(file_contents, mime_type, 'avatar')
     avatar_url = await users_service.update_avatar(conn, request.state.user_id, file_contents, mime_type)
     return {'avatar_url': avatar_url}
 

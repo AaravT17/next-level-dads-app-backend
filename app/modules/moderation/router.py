@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from app.common.config.constants import IS_PRODUCTION
 from app.common.dependencies.rate_limiting import ReportContentLimiter, ReportUserLimiter
 from app.common.dependencies.auth import get_consented_user
+from app.common.utils.errors import value_error_to_http
 from app.common.dependencies.db import get_db
 from app.modules.moderation.models import (
     BanStatusResponse,
@@ -54,7 +55,7 @@ async def create_report(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to submit report. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -75,7 +76,7 @@ async def get_my_ban(
             expires_at=ban['expires_at'] if ban else None,
         )
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to fetch ban status. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -94,7 +95,7 @@ async def get_notifications(
         records = await list_notifications(conn, UUID(user_id), unread_only)
         return [NotificationResponse(**dict(r)) for r in records]
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to fetch notifications. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -117,7 +118,7 @@ async def read_notification(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to update notification. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -137,7 +138,7 @@ async def read_all_notifications(
     try:
         await mark_all_notifications_read(conn, UUID(user_id))
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to update notifications. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

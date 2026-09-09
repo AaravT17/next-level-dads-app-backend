@@ -4,6 +4,7 @@ from typing import Literal
 from uuid import UUID
 import asyncpg
 from fastapi import HTTPException, status
+from app.common.utils.errors import value_error_to_http
 from app.common.config.constants import (
     COMMUNITIES_PAGE_LIMIT,
     COMMUNITY_IMAGES_BUCKET,
@@ -223,8 +224,8 @@ async def discover_communities(
         )
         res = await conn.fetch(query, *params)
         return [CommunityResponse(**dict(r)) for r in res]
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
+    except ValueError as e:
+        raise value_error_to_http(e, 'Failed to fetch communities. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -286,8 +287,8 @@ async def get_community(
         return CommunityResponse(**dict(res))
     except HTTPException:
         raise
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
+    except ValueError as e:
+        raise value_error_to_http(e, 'Failed to fetch community details. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -309,8 +310,8 @@ async def get_community_members(
         )
         res = await conn.fetch(query, *params)
         return [CommunityMemberResponse(**dict(r)) for r in res]
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
+    except ValueError as e:
+        raise value_error_to_http(e, 'Failed to fetch community members. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
