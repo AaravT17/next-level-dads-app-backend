@@ -71,6 +71,7 @@ def _build_shared_community(r) -> SharedCommunityResponse | None:
         id=r['shared_community_id'],
         name=r['shared_community_name'],
         description=r['shared_community_description'],
+        image_url=r['shared_community_image_url'],
         member_count=r['shared_community_member_count'] or 0,
     )
 
@@ -277,6 +278,7 @@ async def get_messages(
             m.shared_community_id,
             sc.name AS shared_community_name,
             sc.description AS shared_community_description,
+            sc.image_url AS shared_community_image_url,
             (SELECT COUNT(*) FROM community_members cm WHERE cm.community_id = sc.id)
                 AS shared_community_member_count
         FROM messages m

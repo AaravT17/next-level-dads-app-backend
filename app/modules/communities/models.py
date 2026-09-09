@@ -18,6 +18,7 @@ class CommunityResponse(BaseModel):
     description: str | None = Field(
         max_length=COMMUNITY_DESCRIPTION_MAX_LENGTH, default=None
     )
+    image_url: str | None = None
     member_count: int = Field(ge=0, default=0)
     created_by: UUID | None = None
     created_at: datetime

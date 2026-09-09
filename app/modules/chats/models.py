@@ -48,6 +48,7 @@ class SharedCommunityResponse(BaseModel):
     id: UUID
     name: str = Field(max_length=COMMUNITY_NAME_MAX_LENGTH)
     description: str | None = Field(None, max_length=COMMUNITY_DESCRIPTION_MAX_LENGTH)
+    image_url: str | None = None
     member_count: int = Field(ge=0, default=0)
 
 

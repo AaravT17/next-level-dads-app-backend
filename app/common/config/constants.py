@@ -49,6 +49,9 @@ REPLIES_PAGE_LIMIT = 5
 # tap from becoming a broadcast. Ten is a handful of friends, not a mailing list.
 COMMUNITY_INVITE_MAX_RECIPIENTS = 10
 COMMUNITY_INVITE_MESSAGE = "Check out this community. I think you'd enjoy it!"
+# Community photos live in their own bucket, keyed by community id, so a
+# community's photo is never confused with a user's avatar.
+COMMUNITY_IMAGES_BUCKET = 'community-images'
 
 # --- Chats ---
 CHAT_PREVIEWS_PAGE_LIMIT = 20

@@ -71,6 +71,10 @@ def CreateCommunityLimiter():
     return RateLimiter(times=20, hours=1, identifier=user_id_key, callback=rate_limit_exceeded_callback)
 
 
+def UpdateCommunityImageLimiter():
+    return RateLimiter(times=10, hours=1, identifier=user_id_key, callback=rate_limit_exceeded_callback)
+
+
 def CreateConversationLimiter():
     return RateLimiter(times=20, hours=1, identifier=user_id_key, callback=rate_limit_exceeded_callback)
 

@@ -1,4 +1,15 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Query, Body, Request
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Body,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from app.common.config.constants import IS_PRODUCTION
 from app.common.dependencies.rate_limiting import (
     CreateCommunityLimiter,
@@ -6,6 +17,7 @@ from app.common.dependencies.rate_limiting import (
     InviteToCommunityLimiter,
     PostMessageLimiter,
     PostReplyLimiter,
+    UpdateCommunityImageLimiter,
 )
 from typing import Literal
 from app.common.dependencies.auth import get_consented_user
@@ -101,6 +113,34 @@ async def leave_community(
     user_id: str = Depends(get_consented_user),
 ):
     await communities_service.leave_community(conn, id, user_id)
+
+
+@router.put(
+    '/{id}/image',
+    dependencies=[Depends(get_consented_user), Depends(UpdateCommunityImageLimiter())]
+    if IS_PRODUCTION
+    else [Depends(get_consented_user)],
+)
+async def update_community_image(
+    id: str,
+    request: Request,
+    image: UploadFile = File(...),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    file_contents = await image.read()
+    image_url = await communities_service.update_community_image(
+        conn, id, request.state.user_id, file_contents, image.content_type
+    )
+    return {'image_url': image_url}
+
+
+@router.delete('/{id}/image', status_code=status.HTTP_204_NO_CONTENT)
+async def delete_community_image(
+    id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_consented_user),
+):
+    await communities_service.delete_community_image(conn, id, user_id)
 
 
 @router.post(

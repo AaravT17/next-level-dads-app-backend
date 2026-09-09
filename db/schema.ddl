@@ -97,6 +97,7 @@ CREATE TABLE communities (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name        VARCHAR(100) NOT NULL,
     description VARCHAR(500),
+    image_url   TEXT,
     created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at  TIMESTAMPTZ DEFAULT now()
 );

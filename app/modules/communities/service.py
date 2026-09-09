@@ -1,10 +1,13 @@
 from datetime import datetime
+import time
 from typing import Literal
 from uuid import UUID
 import asyncpg
 from fastapi import HTTPException, status
 from app.common.config.constants import (
     COMMUNITIES_PAGE_LIMIT,
+    COMMUNITY_IMAGES_BUCKET,
+    IMAGE_MIME_TO_EXT,
     PROFILES_PAGE_LIMIT,
     CONVERSATIONS_PAGE_LIMIT,
     RESUME_PAGE_LIMIT,
@@ -12,6 +15,7 @@ from app.common.config.constants import (
     REPLIES_PAGE_LIMIT,
     COMMUNITY_INVITE_MESSAGE,
 )
+from app.common.config.supabase import get_supabase_admin
 from app.modules.communities.models import (
     CommunityResponse,
     AuthorInfo,
@@ -380,6 +384,145 @@ async def leave_community(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Failed to leave community. Please try again later.',
         )
+
+
+async def update_community_image(
+    conn: asyncpg.Connection,
+    community_id: str,
+    user_id: str,
+    file_contents: bytes,
+    mime_type: str | None,
+) -> str:
+    """Replace a community's photo and return its new public URL.
+
+    Admins only: the photo is how the community presents itself in every list,
+    so changing it is an act of ownership, not ordinary membership.
+    """
+    try:
+        community_id, user_id = UUID(community_id), UUID(user_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid community id.')
+
+    await _assert_community_admin(conn, community_id, user_id)
+
+    image_url = await _upload_community_image_to_storage(community_id, file_contents, mime_type)
+    try:
+        await conn.execute(
+            'UPDATE communities SET image_url = $1 WHERE id = $2',
+            image_url,
+            community_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to update community photo. Please try again later.',
+        )
+    return image_url
+
+
+async def delete_community_image(
+    conn: asyncpg.Connection,
+    community_id: str,
+    user_id: str,
+):
+    try:
+        community_id, user_id = UUID(community_id), UUID(user_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid community id.')
+
+    await _assert_community_admin(conn, community_id, user_id)
+
+    try:
+        await conn.execute('UPDATE communities SET image_url = NULL WHERE id = $1', community_id)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to remove community photo. Please try again later.',
+        )
+    # The row is the source of truth. A file left behind is invisible to every
+    # reader, so a failed storage delete must not fail the request.
+    await _delete_community_image_from_storage(community_id)
+
+
+async def _assert_community_admin(
+    conn: asyncpg.Connection,
+    community_id: UUID,
+    user_id: UUID,
+):
+    """404 when the community is gone, 403 when the caller is not one of its admins."""
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT cm.role
+            FROM communities c
+            LEFT JOIN community_members cm ON cm.community_id = c.id AND cm.user_id = $2
+            WHERE c.id = $1
+            """,
+            community_id,
+            user_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to verify community permissions. Please try again later.',
+        )
+
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Community not found.')
+    if row['role'] != 'admin':
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='Only community admins can change the community photo.',
+        )
+
+
+async def _upload_community_image_to_storage(
+    community_id: UUID,
+    file_contents: bytes,
+    mime_type: str | None,
+) -> str:
+    """Validate mime type, upload the photo to Supabase storage, and return the public URL."""
+    if not mime_type or mime_type not in IMAGE_MIME_TO_EXT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Invalid community photo type. Supported types: PNG, JPG, JPEG.',
+        )
+    supabase_admin = get_supabase_admin()
+    path = str(community_id)
+    try:
+        await supabase_admin.storage.from_(COMMUNITY_IMAGES_BUCKET).upload(
+            path=path,
+            file=file_contents,
+            file_options={'content-type': mime_type, 'upsert': 'true'},
+        )
+        public_url = await supabase_admin.storage.from_(COMMUNITY_IMAGES_BUCKET).get_public_url(path)
+        return _versioned_url(public_url)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to upload community photo. Please try again later.',
+        )
+
+
+def _versioned_url(public_url: str) -> str:
+    """Stamp the stored URL so a replaced photo is not served from cache.
+
+    The file always sits at the same path, so without this every upload returns
+    a URL the browser already has and the old photo keeps showing until a hard
+    refresh. The stamp only ever changes when a new file is uploaded.
+    """
+    stamped = public_url.rstrip('?')
+    separator = '&' if '?' in stamped else '?'
+    return f'{stamped}{separator}v={int(time.time())}'
+
+
+async def _delete_community_image_from_storage(community_id: UUID):
+    supabase_admin = get_supabase_admin()
+    try:
+        await supabase_admin.storage.from_(COMMUNITY_IMAGES_BUCKET).remove([str(community_id)])
+    except Exception:
+        # TODO: Log the exception
+        pass
 
 
 async def list_conversations(
@@ -1296,6 +1439,7 @@ async def invite_to_community(
                 c.id,
                 c.name,
                 c.description,
+                c.image_url,
                 (SELECT COUNT(*) FROM community_members cm WHERE cm.community_id = c.id) AS member_count
             FROM communities c
             WHERE c.id = $1
@@ -1341,6 +1485,7 @@ async def invite_to_community(
             id=community['id'],
             name=community['name'],
             description=community['description'],
+            image_url=community['image_url'],
             member_count=community['member_count'] or 0,
         ),
         content=COMMUNITY_INVITE_MESSAGE,
