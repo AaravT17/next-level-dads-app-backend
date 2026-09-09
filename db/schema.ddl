@@ -345,6 +345,9 @@ CREATE TABLE moderation_filtered_messages (
     layer        TEXT NOT NULL CHECK (layer IN ('profanity', 'hate_speech', 'report')),
     reason       TEXT,
     score        DOUBLE PRECISION,
+    -- NULL when an automatic layer removed the content; set when a moderator
+    -- actioned a report.
+    actioned_by  UUID REFERENCES public.users(id) ON DELETE SET NULL,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -362,6 +365,9 @@ CREATE TABLE moderation_reports (
     reason       TEXT,
     status       TEXT NOT NULL DEFAULT 'pending'
                  CHECK (status IN ('pending', 'reviewed', 'dismissed', 'actioned')),
+    -- The moderator who actioned this report; NULL while it is unactioned.
+    actioned_by  UUID REFERENCES public.users(id) ON DELETE SET NULL,
+    actioned_at  TIMESTAMPTZ,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (content_type, content_id, reporter_id)
 );
@@ -376,6 +382,10 @@ CREATE TABLE moderation_bans (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id    UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
     reason     TEXT,
+    -- Who issued the ban and who lifted it early. NULL created_by means an
+    -- automatic layer issued it; expires_at in the past is the lift itself.
+    created_by UUID REFERENCES public.users(id) ON DELETE SET NULL,
+    lifted_by  UUID REFERENCES public.users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ NOT NULL
 );
@@ -410,6 +420,9 @@ CREATE TABLE user_reports (
     reason      TEXT,
     status      TEXT NOT NULL DEFAULT 'pending'
                 CHECK (status IN ('pending', 'reviewed', 'dismissed', 'actioned')),
+    -- The moderator who actioned this report; NULL while it is unactioned.
+    actioned_by UUID REFERENCES public.users(id) ON DELETE SET NULL,
+    actioned_at TIMESTAMPTZ,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

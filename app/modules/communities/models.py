@@ -128,12 +128,18 @@ class CommunityInviteRequest(BaseModel):
         ..., min_length=1, max_length=COMMUNITY_INVITE_MAX_RECIPIENTS
     )
 
-    @field_validator("recipient_ids", mode="before")
-    def deduplicate_recipient_ids(cls, recipient_ids: list[UUID]):
-        # Selecting the same person twice is a client slip, not a request for two
-        # invites — dedupe before the length cap so it cannot be used to inflate it.
-        if not isinstance(recipient_ids, list):
-            return recipient_ids
+    @field_validator("recipient_ids")
+    def deduplicate_recipient_ids(cls, recipient_ids: list[UUID]) -> list[UUID]:
+        # Selecting the same person twice is a client slip, not a request for
+        # two invites.
+        #
+        # Runs after parsing so it dedupes UUID objects. In "before" mode it saw
+        # raw strings, and two spellings of one id -- differing case, or braces --
+        # survived as distinct entries and sent two invites into the same DM.
+        #
+        # The length cap therefore applies to what was sent, before deduping.
+        # That is the safe direction: deduping can only reduce the count, so the
+        # cap can never be inflated past COMMUNITY_INVITE_MAX_RECIPIENTS.
         return list(dict.fromkeys(recipient_ids))
 
 

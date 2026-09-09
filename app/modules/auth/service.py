@@ -1,8 +1,11 @@
+import logging
 import os
 from fastapi import HTTPException, Response, status
 from supabase_auth.errors import AuthApiError
 from app.common.config.constants import IS_PRODUCTION, REFRESH_TOKEN_EXPIRY_DAYS
 from app.common.config.supabase import get_supabase
+
+logger = logging.getLogger(__name__)
 
 
 async def register(email: str, password: str):
@@ -94,7 +97,12 @@ async def logout(access_token: str, response: Response):
     try:
         await supabase.auth.admin.sign_out(access_token, 'local')
     except Exception:
-        pass  # clear the cookie even if sign out fails
+        # The cookie is cleared regardless: the user asked to log out and must
+        # end up logged out on this device either way. But this path leaves the
+        # refresh token valid on Supabase's side while the response still says
+        # success, so it has to be visible -- a run of these means sessions are
+        # not actually being revoked.
+        logger.exception('Supabase sign-out failed; refresh token may still be valid')
     _clear_refresh_cookie(response)
 
 

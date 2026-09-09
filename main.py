@@ -3,6 +3,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from app.common.config.logging import configure_logging
+
+configure_logging()
+
 from fastapi import FastAPI
 from app.modules.auth.router import router as auth_router
 from app.modules.users.router import router as users_router
@@ -23,10 +27,19 @@ from app.common.config.supabase import init_supabase
 import asyncpg
 from fastapi_limiter import FastAPILimiter
 from app.common.config.constants import IS_PRODUCTION
+from app.modules.moderation import profanity_filter
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if IS_PRODUCTION and not profanity_filter.is_available():
+        # The toxicity layer is a stub, so the wordlist is the only filtering
+        # that runs. Booting without it would serve every post unmoderated with
+        # nothing but a warning line to say so -- better to not come up at all.
+        raise RuntimeError(
+            'better-profanity failed to load; it is the only active moderation '
+            'layer. Refusing to start in production without content filtering.'
+        )
     try:
         await init_supabase()
         init_redis()

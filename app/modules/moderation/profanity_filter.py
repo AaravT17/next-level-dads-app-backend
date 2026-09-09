@@ -17,12 +17,25 @@ try:
 
     _profanity.load_censor_words()
     _AVAILABLE = True
-except ImportError:  # pragma: no cover - optional dependency
+except Exception:  # pragma: no cover - optional dependency
+    # Catches a failed wordlist load as well as a missing package: either way
+    # the layer cannot run, and both must degrade the same way.
     logger.warning(
-        "better-profanity is not installed; profanity layer disabled. "
+        "better-profanity is unavailable; profanity layer disabled. "
         "Run `pip install better-profanity`."
     )
     _AVAILABLE = False
+
+
+def is_available() -> bool:
+    """Whether the wordlist actually loaded.
+
+    Checked at startup. With the toxicity layer stubbed out (see toxicity.py)
+    this is the *only* live moderation layer, so if it is missing every post
+    passes clean -- silently, because check_profanity returns a clean result
+    rather than raising.
+    """
+    return _AVAILABLE
 
 
 def _matched_word(text: str) -> str | None:

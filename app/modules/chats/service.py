@@ -1,5 +1,6 @@
 import asyncpg
 import asyncio
+import logging
 from datetime import datetime
 from uuid import UUID
 from fastapi import status, HTTPException
@@ -101,6 +102,23 @@ _CHAT_PREVIEW_QUERY = """
             ELSE c.dm_user_1
         END
 """
+
+
+logger = logging.getLogger(__name__)
+
+# The event loop holds only a *weak* reference to a task, so a fire-and-forget
+# create_task() whose return value is discarded can be garbage-collected before
+# it finishes. That surfaces as a WebSocket event that silently never arrives --
+# rare, unreproducible, and invisible because _publish_event swallows errors.
+# Keeping a strong reference until the task completes is the documented fix.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> None:
+    """Run a coroutine in the background and keep it alive until it finishes."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 async def get_chat_previews(
@@ -457,7 +475,7 @@ async def send_message(
     # the sender as well (for their other connections)
 
     # publish to all participants except the sender, fire off as background task, don't delay response
-    asyncio.create_task(
+    _spawn(
         _publish_event(
             publish_to=[pid for pid in validation['participant_ids'] if str(pid) != str(user_id)],
             type='messages:new',
@@ -477,8 +495,7 @@ async def _publish_event(
         try:
             await publish(str(uid), {'user_id': str(uid), 'event_data': {'type': type, 'payload': payload}})
         except Exception:
-            # TODO: Log the exception
-            pass
+            logger.exception('Failed to publish %s event to user %s', type, uid)
 
     await asyncio.gather(*[_safe_publish(uid) for uid in publish_to])
 
@@ -524,7 +541,7 @@ async def edit_message(
             detail='Failed to edit message. Please try again later.',
         )
 
-    asyncio.create_task(
+    _spawn(
         _publish_event(
             publish_to=[pid for pid in result['participant_ids'] if str(pid) != str(user_id)],
             type='messages:edit',
@@ -578,7 +595,7 @@ async def delete_message(
             detail='Failed to delete message. Please try again later.',
         )
 
-    asyncio.create_task(
+    _spawn(
         _publish_event(
             publish_to=[pid for pid in result['participant_ids'] if str(pid) != str(user_id)],
             type='messages:delete',
@@ -847,7 +864,7 @@ async def promote_participant(
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail='You cannot make this participant an admin'
             )
-        await conn.execute(
+        result = await conn.execute(
             """
             UPDATE chat_participants
             SET is_admin = TRUE
@@ -856,6 +873,13 @@ async def promote_participant(
             chat_id,
             participant_id,
         )
+        # A participant_id that is not in this chat matches no row. Without this
+        # the caller gets 204 and believes someone was promoted who was not.
+        if result.split()[-1] == '0':
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail='Participant not found in this chat.',
+            )
         return
     except HTTPException:
         raise
@@ -1142,7 +1166,7 @@ async def send_community_invites(
             is_deleted=False,
             created_at=created_at,
         )
-        asyncio.create_task(
+        _spawn(
             _publish_event(
                 publish_to=[recipient_id],
                 type='messages:new',

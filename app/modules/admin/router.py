@@ -60,7 +60,7 @@ async def get_content_reports(
     limit: int = Query(_DEFAULT_LIMIT, ge=1, le=200),
     offset: int = Query(_DEFAULT_OFFSET, ge=0),
     conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin_user),
 ):
     try:
         records = await list_content_reports(conn, status_filter, limit, offset)
@@ -81,7 +81,7 @@ async def update_content_report(
     report_id: UUID,
     payload: AdminReportStatusUpdate,
     conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin_user),
 ):
     try:
         async with conn.transaction():
@@ -91,7 +91,7 @@ async def update_content_report(
             if report is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Report not found.')
             already_actioned = report['status'] == 'actioned'
-            await update_content_report_status(conn, report_id, payload.status)
+            await update_content_report_status(conn, report_id, payload.status, UUID(admin_id))
             if payload.status == 'actioned' and not already_actioned:
                 content_type = ContentType(report['content_type'])
                 content = await get_content_for_moderator_action(
@@ -127,6 +127,7 @@ async def update_content_report(
                         ModerationLayer.REPORT,
                         report['reason'],
                         None,
+                        UUID(admin_id),
                     )
                 if content['author_id'] is not None:
                     await insert_notification(
@@ -158,7 +159,7 @@ async def get_user_reports(
     limit: int = Query(_DEFAULT_LIMIT, ge=1, le=200),
     offset: int = Query(_DEFAULT_OFFSET, ge=0),
     conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin_user),
 ):
     try:
         records = await list_user_reports(conn, status_filter, limit, offset)
@@ -179,7 +180,7 @@ async def update_user_report(
     report_id: UUID,
     payload: AdminReportStatusUpdate,
     conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin_user),
 ):
     try:
         async with conn.transaction():
@@ -189,16 +190,22 @@ async def update_user_report(
             if report is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Report not found.')
             already_actioned = report['status'] == 'actioned'
-            await update_user_report_status(conn, report_id, payload.status)
+            await update_user_report_status(conn, report_id, payload.status, UUID(admin_id))
             if payload.status == 'actioned' and not already_actioned:
                 reason = report['reason'] or 'Confirmed user report'
                 # TODO: Remove or moderator-hide the reported user's content
                 # when applying an admin-confirmed ban.
+                # Replace any active ban rather than stacking a second one.
+                # Without this an admin who later lifts the ban can leave an
+                # overlapping row behind and the user stays banned -- the same
+                # invariant create_ban already holds.
+                await deactivate_active_bans(conn, report['reported_id'])
                 await insert_ban(
                     conn,
                     report['reported_id'],
                     reason,
                     _ADMIN_USER_BAN_HOURS,
+                    UUID(admin_id),
                 )
                 await insert_notification(
                     conn,
@@ -224,7 +231,7 @@ async def get_filtered_messages(
     limit: int = Query(_DEFAULT_LIMIT, ge=1, le=200),
     offset: int = Query(_DEFAULT_OFFSET, ge=0),
     conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin_user),
 ):
     try:
         records = await list_filtered_messages_admin(conn, limit, offset)
@@ -245,7 +252,7 @@ async def get_content_context(
     content_type: str,
     content_id: UUID,
     conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin_user),
 ):
     if content_type not in {'conversation', 'message', 'reply'}:
         raise HTTPException(
@@ -272,7 +279,7 @@ async def get_user_context(
     user_id: UUID,
     limit: int = Query(200, ge=1, le=500),
     conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin_user),
 ):
     try:
         context = await get_user_activity_context_admin(conn, user_id, limit)
@@ -297,7 +304,7 @@ async def get_active_bans(
     limit: int = Query(_DEFAULT_LIMIT, ge=1, le=200),
     offset: int = Query(_DEFAULT_OFFSET, ge=0),
     conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin_user),
 ):
     try:
         records = await list_active_bans_admin(conn, limit, offset)
@@ -314,7 +321,7 @@ async def get_active_bans(
 async def create_ban(
     payload: AdminBanCreate,
     conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin_user),
 ):
     try:
         async with conn.transaction():
@@ -326,6 +333,7 @@ async def create_ban(
                 payload.user_id,
                 payload.reason,
                 payload.duration_hours,
+                UUID(admin_id),
             )
         user_name = await conn.fetchval('SELECT name FROM public.users WHERE id = $1', payload.user_id)
         return AdminBanItem(
@@ -348,10 +356,10 @@ async def create_ban(
 async def remove_ban(
     ban_id: UUID,
     conn: asyncpg.Connection = Depends(get_db),
-    _admin: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin_user),
 ):
     try:
-        lifted = await lift_ban(conn, ban_id)
+        lifted = await lift_ban(conn, ban_id, UUID(admin_id))
         if not lifted:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Ban not found.')
     except HTTPException:
