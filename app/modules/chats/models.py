@@ -125,3 +125,9 @@ class UpdateChatNameRequest(BaseModel):
     @field_validator('name', mode='before')
     def validate_name(cls, name: str):
         return name.strip()
+
+
+class ChatMembershipResponse(BaseModel):
+    chat_id: UUID
+    last_read_at: datetime | None = None
+    updated_at: datetime

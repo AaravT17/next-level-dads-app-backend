@@ -9,6 +9,7 @@ from uuid import UUID
 from app.modules.chats.models import (
     CreateChatRequest,
     ChatResponse,
+    ChatMembershipResponse,
     MessageResponse,
     SendMessageRequest,
     EditMessageRequest,
@@ -52,6 +53,14 @@ async def create_chat(
     result = await chats_service.create_chat(conn, request.state.user_id, body)
     response.status_code = status.HTTP_201_CREATED if result['created'] else status.HTTP_200_OK
     return {'id': result['id']}
+
+
+@router.get('/membership', response_model=list[ChatMembershipResponse])
+async def get_chat_memberships(
+    user_id: str = Depends(get_consented_user),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    return await chats_service.get_user_chat_memberships(conn, user_id)
 
 
 @router.get('/{chat_id}', response_model=ChatResponse)

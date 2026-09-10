@@ -23,6 +23,7 @@ from app.modules.chats.models import (
     ChatParticipantResponse,
     AddParticipantsRequest,
     ChatAddableParticipantResponse,
+    ChatMembershipResponse,
 )
 
 
@@ -990,6 +991,26 @@ async def mark_chat_read(conn: asyncpg.Connection, user_id: str, chat_id: str) -
         user_id,
         chat_id,
     )
+
+
+async def get_user_chat_memberships(conn: asyncpg.Connection, user_id: str) -> list[ChatMembershipResponse]:
+    """Return chat_id, last_read_at, updated_at for all chats the user is a participant in."""
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT c.id AS chat_id, cp.last_read_at, c.updated_at
+            FROM chat_participants cp
+            JOIN chats c ON c.id = cp.chat_id
+            WHERE cp.user_id = $1
+            """,
+            user_id,
+        )
+        return [ChatMembershipResponse(**dict(r)) for r in rows]
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch chat memberships. Please try again later.',
+        )
 
 
 async def get_user_chat_ids(conn: asyncpg.Connection, user_id: str) -> set[str]:
