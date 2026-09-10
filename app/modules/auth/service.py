@@ -3,7 +3,9 @@ import os
 from fastapi import HTTPException, Response, status
 from supabase_auth.errors import AuthApiError
 from app.common.config.constants import IS_PRODUCTION, REFRESH_TOKEN_EXPIRY_DAYS
+from app.common.config.redis import publish
 from app.common.config.supabase import get_supabase
+from app.common.ws.connection_manager import SESSION_REVOKED_EVENT
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +96,10 @@ async def create_session_from_oauth(access_token: str, refresh_token: str, respo
 
 async def logout(access_token: str, response: Response):
     supabase = get_supabase()
+    # Resolved before the sign-out, while the token still works. A WebSocket is
+    # authorised once, at connect, so without an explicit teardown the sockets
+    # this session opened keep delivering the user's messages after logout.
+    user_id = await verify_token(access_token)
     try:
         await supabase.auth.admin.sign_out(access_token, 'local')
     except Exception:
@@ -103,6 +109,15 @@ async def logout(access_token: str, response: Response):
         # success, so it has to be visible -- a run of these means sessions are
         # not actually being revoked.
         logger.exception('Supabase sign-out failed; refresh token may still be valid')
+
+    if user_id:
+        try:
+            await publish(user_id, {'user_id': user_id, 'event_data': {'type': SESSION_REVOKED_EVENT}})
+        except Exception:
+            # The cookie is still cleared and the token still revoked; only the
+            # live socket survives, and it dies at token expiry regardless.
+            logger.exception('Failed to publish session revocation for user %s', user_id)
+
     _clear_refresh_cookie(response)
 
 
