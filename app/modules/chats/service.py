@@ -203,7 +203,7 @@ async def create_chat(
             detail='Failed to create chat. Please try again later.',
         )
 
-    connected_ids = set(r['user_id'] for r in connections)
+    connected_ids = {r['user_id'] for r in connections}
     if any(pid not in connected_ids for pid in participant_ids):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail='You can only add users with whom you are connected'

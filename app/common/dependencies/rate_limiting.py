@@ -1,5 +1,5 @@
 from math import ceil
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from fastapi import HTTPException, Request, status
 from fastapi_limiter.depends import RateLimiter
