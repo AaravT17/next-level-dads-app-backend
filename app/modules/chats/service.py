@@ -920,7 +920,7 @@ async def demote_participant(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Chat not found')
         if not validation['is_admin'] or validation['is_owner']:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='You cannot demote this participant.')
-        await conn.execute(
+        result = await conn.execute(
             """
             UPDATE chat_participants
             SET is_admin = FALSE
@@ -929,6 +929,14 @@ async def demote_participant(
             chat_id,
             participant_id,
         )
+        # Same reasoning as promote_participant: a participant_id that is not in
+        # this chat matches no row, and a bare 204 would tell the caller someone
+        # was demoted who was not.
+        if result.split()[-1] == '0':
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail='Participant not found in this chat.',
+            )
         return
     except HTTPException:
         raise

@@ -365,7 +365,9 @@ CREATE TABLE moderation_reports (
     reason       TEXT,
     status       TEXT NOT NULL DEFAULT 'pending'
                  CHECK (status IN ('pending', 'reviewed', 'dismissed', 'actioned')),
-    -- The moderator who actioned this report; NULL while it is unactioned.
+    -- The moderator who last decided this report and when. Written for every
+    -- decision, dismissal included -- a dismissal is a call someone made and
+    -- is worth attributing. NULL means no moderator has looked at it yet.
     actioned_by  UUID REFERENCES public.users(id) ON DELETE SET NULL,
     actioned_at  TIMESTAMPTZ,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -420,7 +422,9 @@ CREATE TABLE user_reports (
     reason      TEXT,
     status      TEXT NOT NULL DEFAULT 'pending'
                 CHECK (status IN ('pending', 'reviewed', 'dismissed', 'actioned')),
-    -- The moderator who actioned this report; NULL while it is unactioned.
+    -- The moderator who last decided this report and when. Written for every
+    -- decision, dismissal included -- a dismissal is a call someone made and
+    -- is worth attributing. NULL means no moderator has looked at it yet.
     actioned_by UUID REFERENCES public.users(id) ON DELETE SET NULL,
     actioned_at TIMESTAMPTZ,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()

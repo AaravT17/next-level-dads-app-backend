@@ -139,6 +139,7 @@ async def insert_filtered_message(
         layer.value,
         reason,
         score,
+        actioned_by,
     )
 
 
@@ -717,16 +718,23 @@ async def get_user_activity_context_admin(
 async def deactivate_active_bans(
     conn: asyncpg.Connection,
     user_id: UUID,
+    superseded_by: UUID | None = None,
 ) -> None:
     """Expire every currently-active ban for a user.
 
     Keeps the invariant that a user has at most one active ban, so an admin
     issuing a new ban replaces any existing one rather than stacking.
+
+    `superseded_by` is the admin doing the replacing. Recording it matters
+    because the row this leaves behind -- expires_at in the past, no actor -- is
+    otherwise indistinguishable from a ban that simply ran its course, which
+    defeats the point of keeping the audit trail at all.
     """
     await conn.execute(
-        "UPDATE moderation_bans SET expires_at = NOW() "
+        "UPDATE moderation_bans SET expires_at = NOW(), lifted_by = $2 "
         "WHERE user_id = $1 AND expires_at > NOW()",
         user_id,
+        superseded_by,
     )
 
 

@@ -199,7 +199,7 @@ async def update_user_report(
                 # Without this an admin who later lifts the ban can leave an
                 # overlapping row behind and the user stays banned -- the same
                 # invariant create_ban already holds.
-                await deactivate_active_bans(conn, report['reported_id'])
+                await deactivate_active_bans(conn, report['reported_id'], UUID(admin_id))
                 await insert_ban(
                     conn,
                     report['reported_id'],
@@ -327,7 +327,7 @@ async def create_ban(
         async with conn.transaction():
             # Replace any existing active ban so a user never accumulates
             # overlapping bans (which would survive an admin lifting one).
-            await deactivate_active_bans(conn, payload.user_id)
+            await deactivate_active_bans(conn, payload.user_id, UUID(admin_id))
             record = await insert_ban(
                 conn,
                 payload.user_id,
