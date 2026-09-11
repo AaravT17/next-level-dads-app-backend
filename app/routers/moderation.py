@@ -1,8 +1,7 @@
 from uuid import UUID
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
-from app.config.rate_limits import ReportContentLimiter, ReportUserLimiter, is_production
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.dependencies.auth import get_consented_user
 from app.dependencies.db import get_db
@@ -24,29 +23,26 @@ from app.moderation.service import (
 )
 
 router = APIRouter(
-    prefix='/api/moderation',
-    tags=['moderation'],
+    prefix="/api/moderation",
+    tags=["moderation"],
 )
 
 
 @router.post(
-    '/reports',
+    "/reports",
     response_model=ReportResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(get_consented_user), Depends(ReportContentLimiter())]
-    if is_production()
-    else [Depends(get_consented_user)],
 )
 async def create_report(
     payload: ReportCreate,
-    request: Request,
     conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_consented_user),
 ):
     """Report a conversation, message or reply for manual review."""
     try:
         record = await report_content(
             conn,
-            UUID(request.state.user_id),
+            UUID(user_id),
             payload.content_type,
             payload.content_id,
             payload.reason,
@@ -59,11 +55,11 @@ async def create_report(
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to submit report. Please try again later.',
+            detail="Failed to submit report. Please try again later.",
         )
 
 
-@router.get('/ban', response_model=BanStatusResponse)
+@router.get("/ban", response_model=BanStatusResponse)
 async def get_my_ban(
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_consented_user),
@@ -73,18 +69,18 @@ async def get_my_ban(
         ban = await get_active_ban(conn, UUID(user_id))
         return BanStatusResponse(
             banned=ban is not None,
-            expires_at=ban['expires_at'] if ban else None,
+            expires_at=ban["expires_at"] if ban else None,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to fetch ban status. Please try again later.',
+            detail="Failed to fetch ban status. Please try again later.",
         )
 
 
-@router.get('/notifications', response_model=list[NotificationResponse])
+@router.get("/notifications", response_model=list[NotificationResponse])
 async def get_notifications(
     unread_only: bool = Query(False),
     conn: asyncpg.Connection = Depends(get_db),
@@ -99,12 +95,12 @@ async def get_notifications(
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to fetch notifications. Please try again later.',
+            detail="Failed to fetch notifications. Please try again later.",
         )
 
 
 @router.post(
-    '/notifications/{notification_id}/read',
+    "/notifications/{notification_id}/read",
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def read_notification(
@@ -122,12 +118,12 @@ async def read_notification(
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to update notification. Please try again later.',
+            detail="Failed to update notification. Please try again later.",
         )
 
 
 @router.post(
-    '/notifications/read-all',
+    "/notifications/read-all",
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def read_all_notifications(
@@ -142,29 +138,25 @@ async def read_all_notifications(
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to update notifications. Please try again later.',
+            detail="Failed to update notifications. Please try again later.",
         )
 
 
 @router.post(
-    '/user-reports',
+    "/user-reports",
     response_model=UserReportResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(get_consented_user), Depends(ReportUserLimiter())]
-    if is_production()
-    else [Depends(get_consented_user)],
 )
 async def create_user_report(
     payload: UserReportCreate,
-    request: Request,
     conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_consented_user),
 ):
     """Report another user for review by admins."""
-    user_id = request.state.user_id
     if str(payload.reported_id) == user_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail='You cannot report yourself.',
+            detail="You cannot report yourself.",
         )
     try:
         record = await insert_user_report(
@@ -179,5 +171,5 @@ async def create_user_report(
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to submit report. Please try again later.',
+            detail="Failed to submit report. Please try again later.",
         )
