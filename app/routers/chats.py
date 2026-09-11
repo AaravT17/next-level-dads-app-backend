@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, status, Query, Response
+from fastapi import APIRouter, Depends, status, Query, Request, Response
+from app.config.rate_limits import CreateChatLimiter, SendChatMessageLimiter, is_production
 from app.dependencies.auth import get_consented_user
 from app.dependencies.db import get_db
 import asyncpg
@@ -35,14 +36,19 @@ async def get_chat_previews(
     return await chats_service.get_chat_previews(conn, user_id, cursor_id, cursor_updated_at, name)
 
 
-@router.post('/')
+@router.post(
+    '/',
+    dependencies=[Depends(get_consented_user), Depends(CreateChatLimiter())]
+    if is_production()
+    else [Depends(get_consented_user)],
+)
 async def create_chat(
     body: CreateChatRequest,
+    request: Request,
     response: Response,
-    user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    result = await chats_service.create_chat(conn, user_id, body)
+    result = await chats_service.create_chat(conn, request.state.user_id, body)
     response.status_code = status.HTTP_201_CREATED if result['created'] else status.HTTP_200_OK
     return {'id': result['id']}
 
@@ -77,14 +83,21 @@ async def get_chat_messages(
     return await chats_service.get_messages(conn, user_id, chat_id, cursor_id, cursor_created_at)
 
 
-@router.post('/{chat_id}/messages', response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    '/{chat_id}/messages',
+    response_model=MessageResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(get_consented_user), Depends(SendChatMessageLimiter())]
+    if is_production()
+    else [Depends(get_consented_user)],
+)
 async def send_message(
     chat_id: UUID,
+    request: Request,
     body: SendMessageRequest,
-    user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    return await chats_service.send_message(conn, user_id, chat_id, body)
+    return await chats_service.send_message(conn, request.state.user_id, chat_id, body)
 
 
 @router.patch('/{chat_id}/messages/{message_id}', response_model=EditMessageResponse)
@@ -180,5 +193,3 @@ async def get_addable_participants(
     conn: asyncpg.Connection = Depends(get_db),
 ):
     return await chats_service.get_addable_participants(conn, user_id, chat_id, user_name, cursor_id, cursor_name)
-
-
