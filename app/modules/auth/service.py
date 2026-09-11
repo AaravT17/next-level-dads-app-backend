@@ -1,8 +1,13 @@
+import logging
 import os
 from fastapi import HTTPException, Response, status
 from supabase_auth.errors import AuthApiError
 from app.common.config.constants import IS_PRODUCTION, REFRESH_TOKEN_EXPIRY_DAYS
+from app.common.config.redis import publish
 from app.common.config.supabase import get_supabase
+from app.common.ws.connection_manager import SESSION_REVOKED_EVENT
+
+logger = logging.getLogger(__name__)
 
 
 async def register(email: str, password: str):
@@ -53,10 +58,28 @@ async def login(email: str, password: str, response: Response) -> str:
 
 
 async def create_session_from_oauth(access_token: str, refresh_token: str, response: Response) -> str:
+    """Turn the tokens from an OAuth redirect into our own cookie-backed session.
+
+    Both tokens are checked, and checked against each other. The access token
+    says who the caller is; exchanging the refresh token proves that token is
+    real and, the part that matters, that it belongs to the same user. Without
+    the second check the refresh token is simply whatever was posted, so anyone
+    who could get a victim's browser to call this endpoint would pin a token of
+    their own choosing into the victim's session.
+
+    The exchange rotates the refresh token, so the cookie gets the rotated one
+    and the caller gets the matching fresh access token back.
+    """
     supabase = get_supabase()
     try:
         user = await supabase.auth.get_user(access_token)
-        if not user:
+        if not user or not user.user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid token.')
+
+        res = await supabase.auth.refresh_session(refresh_token)
+        if not res or not res.session or not res.session.user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid token.')
+        if res.session.user.id != user.user.id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid token.')
     except HTTPException:
         raise
@@ -67,16 +90,34 @@ async def create_session_from_oauth(access_token: str, refresh_token: str, respo
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Something went wrong. Please try again later.',
         )
-    _set_refresh_cookie(response, refresh_token)
-    return access_token
+    _set_refresh_cookie(response, res.session.refresh_token)
+    return res.session.access_token
 
 
 async def logout(access_token: str, response: Response):
     supabase = get_supabase()
+    # Resolved before the sign-out, while the token still works. A WebSocket is
+    # authorised once, at connect, so without an explicit teardown the sockets
+    # this session opened keep delivering the user's messages after logout.
+    user_id = await verify_token(access_token)
     try:
         await supabase.auth.admin.sign_out(access_token, 'local')
     except Exception:
-        pass  # clear the cookie even if sign out fails
+        # The cookie is cleared regardless: the user asked to log out and must
+        # end up logged out on this device either way. But this path leaves the
+        # refresh token valid on Supabase's side while the response still says
+        # success, so it has to be visible -- a run of these means sessions are
+        # not actually being revoked.
+        logger.exception('Supabase sign-out failed; refresh token may still be valid')
+
+    if user_id:
+        try:
+            await publish(user_id, {'user_id': user_id, 'event_data': {'type': SESSION_REVOKED_EVENT}})
+        except Exception:
+            # The cookie is still cleared and the token still revoked; only the
+            # live socket survives, and it dies at token expiry regardless.
+            logger.exception('Failed to publish session revocation for user %s', user_id)
+
     _clear_refresh_cookie(response)
 
 

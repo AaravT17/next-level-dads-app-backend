@@ -85,6 +85,7 @@ async def send_connection_request(
     conn: asyncpg.Connection,
     curr_user_id: UUID,
     target_user_id: UUID,
+    note: str | None = None,
 ) -> tuple[ConnectionStatusResponse, bool]:
     """
     Sends a connection request from the current user to the target user and returns (connection_status, created).
@@ -94,13 +95,14 @@ async def send_connection_request(
     try:
         res = await conn.fetchrow(
             """
-            INSERT INTO connections (requesting_id, requested_id, status)
-            VALUES ($1, $2, 'pending')
+            INSERT INTO connections (requesting_id, requested_id, status, note)
+            VALUES ($1, $2, 'pending', $3)
             ON CONFLICT DO NOTHING
             RETURNING requesting_id, status
             """,
             curr_user_id,
             target_user_id,
+            note,
         )
 
         if not res:
@@ -152,12 +154,22 @@ async def accept_connection_request(
     from_user_id: UUID,
     curr_user_id: UUID,
 ):
+    """Accept a pending request addressed to the caller.
+
+    The status predicate matters twice. `unique_pair` means one row per pair, so
+    without it this also matches a 'blocked' row and would turn the accept
+    endpoint into an unblock the moment a block feature exists. It also stops an
+    already-accepted row being re-stamped: `updated_at` is the sort key for
+    get_connections, so a repeated PATCH would otherwise let anyone push
+    themselves to the top of someone else's connection list and disturb that
+    list's keyset cursor mid-page.
+    """
     try:
         res = await conn.fetchrow(
             """
             UPDATE connections
             SET status = 'accepted', updated_at = NOW()
-            WHERE requesting_id = $1 AND requested_id = $2
+            WHERE requesting_id = $1 AND requested_id = $2 AND status = 'pending'
             RETURNING requesting_id, status
             """,
             from_user_id,
@@ -271,7 +283,7 @@ def _build_get_incoming_requests_query(
 
     where_clause = ' AND '.join(conditions)
     query = f"""
-        SELECT u.*, c.id AS connection_id, c.updated_at AS connection_updated_at, 'pending_incoming' AS connection_status
+        SELECT u.*, c.id AS connection_id, c.updated_at AS connection_updated_at, c.note, 'pending_incoming' AS connection_status
         FROM connections c
         JOIN user_profiles u ON u.id = c.requesting_id
         WHERE {where_clause}
@@ -305,7 +317,7 @@ def _build_get_outgoing_requests_query(
 
     where_clause = ' AND '.join(conditions)
     query = f"""
-        SELECT u.*, c.id AS connection_id, c.updated_at AS connection_updated_at, 'pending_outgoing' AS connection_status
+        SELECT u.*, c.id AS connection_id, c.updated_at AS connection_updated_at, c.note, 'pending_outgoing' AS connection_status
         FROM connections c
         JOIN user_profiles u ON u.id = c.requested_id
         WHERE {where_clause}

@@ -1,21 +1,38 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Query, Body, Request
-from app.common.config.constants import IS_PRODUCTION
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Body,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
+from app.common.config.constants import IS_PRODUCTION, MAX_IMAGE_UPLOAD_BYTES
+from app.common.utils.uploads import assert_image_contents, read_capped_upload
 from app.common.dependencies.rate_limiting import (
     CreateCommunityLimiter,
     CreateConversationLimiter,
+    InviteToCommunityLimiter,
     PostMessageLimiter,
     PostReplyLimiter,
+    UpdateCommunityImageLimiter,
 )
 from typing import Literal
 from app.common.dependencies.auth import get_consented_user
 from app.modules.communities.models import CommunityResponse
 from app.modules.users.models import CommunityMemberResponse
+from app.common.utils.errors import value_error_to_http
 from app.common.dependencies.db import get_db, get_pool
 from app.modules.moderation.models import ContentType
 from app.modules.moderation.service import assert_not_banned, moderate_content
 import asyncpg
 import app.modules.communities.service as communities_service
 from app.modules.communities.models import (
+    CommunityInviteRequest,
+    CommunityInviteResponse,
     ConversationCreate,
     ConversationResponse,
     FeedConversationResponse,
@@ -100,6 +117,63 @@ async def leave_community(
     await communities_service.leave_community(conn, id, user_id)
 
 
+@router.put(
+    '/{id}/image',
+    dependencies=[Depends(get_consented_user), Depends(UpdateCommunityImageLimiter())]
+    if IS_PRODUCTION
+    else [Depends(get_consented_user)],
+)
+async def update_community_image(
+    id: str,
+    request: Request,
+    image: UploadFile = File(...),
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    file_contents = await read_capped_upload(request, image, MAX_IMAGE_UPLOAD_BYTES)
+    assert_image_contents(file_contents, image.content_type, 'community photo')
+    image_url = await communities_service.update_community_image(
+        conn, id, request.state.user_id, file_contents, image.content_type
+    )
+    return {'image_url': image_url}
+
+
+@router.delete('/{id}/image', status_code=status.HTTP_204_NO_CONTENT)
+async def delete_community_image(
+    id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_consented_user),
+):
+    await communities_service.delete_community_image(conn, id, user_id)
+
+
+@router.post(
+    '/{id}/invites',
+    response_model=CommunityInviteResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(get_consented_user), Depends(InviteToCommunityLimiter())]
+    if IS_PRODUCTION
+    else [Depends(get_consented_user)],
+)
+async def invite_to_community(
+    id: str,
+    body: CommunityInviteRequest,
+    request: Request,
+    conn: asyncpg.Connection = Depends(get_db),
+):
+    try:
+        community_id = UUID(id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid community id.')
+
+    invited_count = await communities_service.invite_to_community(
+        conn,
+        UUID(request.state.user_id),
+        community_id,
+        body.recipient_ids,
+    )
+    return CommunityInviteResponse(invited_count=invited_count)
+
+
 @router.get('/{community_id}/conversations', response_model=list[ConversationResponse])
 async def get_community_conversations(
     community_id: str,
@@ -128,7 +202,7 @@ async def get_community_conversations(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to fetch conversations. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -172,7 +246,7 @@ async def create_conversation(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to create conversation. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -208,7 +282,7 @@ async def get_conversations_feed(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to fetch conversations. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -233,7 +307,7 @@ async def get_single_conversation(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to fetch conversation. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -252,7 +326,7 @@ async def delete_a_conversation(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to delete conversation. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -280,7 +354,7 @@ async def get_conversation_messages(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to fetch messages. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -321,7 +395,7 @@ async def create_message(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to post reply. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -341,7 +415,7 @@ async def get_conversation_participants(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to fetch participants. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -362,7 +436,7 @@ async def heart_a_conversation(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to heart conversation. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -381,7 +455,7 @@ async def unheart_a_conversation(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to unheart conversation. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -410,7 +484,7 @@ async def heart_a_message(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to heart message. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -429,7 +503,7 @@ async def delete_a_message(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to delete message. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -448,7 +522,7 @@ async def unheart_a_message(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to unheart message. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -476,7 +550,7 @@ async def get_message_replies(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to fetch replies. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -517,7 +591,7 @@ async def create_reply(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to post reply. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -546,7 +620,7 @@ async def heart_a_reply(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to heart reply. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -565,7 +639,7 @@ async def delete_a_reply(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to delete reply. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -584,7 +658,7 @@ async def unheart_a_reply(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise value_error_to_http(e, 'Failed to unheart reply. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

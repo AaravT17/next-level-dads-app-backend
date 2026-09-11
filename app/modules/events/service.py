@@ -5,6 +5,7 @@ from typing import Literal
 import asyncpg
 from fastapi import HTTPException, status
 
+from app.common.utils.errors import value_error_to_http
 from app.common.config.constants import EVENTS_PAGE_LIMIT
 from app.modules.events.models import EventResponse
 
@@ -29,8 +30,8 @@ async def discover_events(
         )
         res = await conn.fetch(query, *params)
         return [EventResponse(**dict(r)) for r in res]
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
+    except ValueError as e:
+        raise value_error_to_http(e, 'Failed to fetch events. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

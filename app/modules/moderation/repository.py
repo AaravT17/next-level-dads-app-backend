@@ -117,14 +117,19 @@ async def insert_filtered_message(
     layer: ModerationLayer,
     reason: str | None,
     score: float | None,
+    actioned_by: UUID | None = None,
 ) -> None:
-    """Record a removal in the audit log."""
+    """Record a removal in the audit log.
+
+    `actioned_by` is the moderator behind the removal, or None when an
+    automatic layer removed the content on its own.
+    """
     await conn.execute(
         """
         INSERT INTO moderation_filtered_messages
             (content_type, content_id, author_id, community_id,
-             original_text, layer, reason, score)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             original_text, layer, reason, score, actioned_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         """,
         content_type.value,
         content_id,
@@ -134,6 +139,7 @@ async def insert_filtered_message(
         layer.value,
         reason,
         score,
+        actioned_by,
     )
 
 
@@ -190,16 +196,19 @@ async def insert_ban(
     user_id: UUID,
     reason: str,
     duration_hours: int,
+    created_by: UUID | None = None,
 ) -> asyncpg.Record:
+    """Issue a ban. `created_by` is None for an automatic ban."""
     return await conn.fetchrow(
         """
-        INSERT INTO moderation_bans (user_id, reason, expires_at)
-        VALUES ($1, $2, NOW() + ($3 || ' hours')::INTERVAL)
+        INSERT INTO moderation_bans (user_id, reason, expires_at, created_by)
+        VALUES ($1, $2, NOW() + ($3 || ' hours')::INTERVAL, $4)
         RETURNING id, created_at, expires_at
         """,
         user_id,
         reason,
         str(duration_hours),
+        created_by,
     )
 
 
@@ -390,11 +399,17 @@ async def update_content_report_status(
     conn: asyncpg.Connection,
     report_id: UUID,
     new_status: str,
+    actioned_by: UUID | None = None,
 ) -> bool:
     result = await conn.execute(
-        "UPDATE moderation_reports SET status = $1 WHERE id = $2",
+        """
+        UPDATE moderation_reports
+        SET status = $1, actioned_by = $3, actioned_at = NOW()
+        WHERE id = $2
+        """,
         new_status,
         report_id,
+        actioned_by,
     )
     return result.split()[-1] != "0"
 
@@ -481,11 +496,17 @@ async def update_user_report_status(
     conn: asyncpg.Connection,
     report_id: UUID,
     new_status: str,
+    actioned_by: UUID | None = None,
 ) -> bool:
     result = await conn.execute(
-        "UPDATE user_reports SET status = $1 WHERE id = $2",
+        """
+        UPDATE user_reports
+        SET status = $1, actioned_by = $3, actioned_at = NOW()
+        WHERE id = $2
+        """,
         new_status,
         report_id,
+        actioned_by,
     )
     return result.split()[-1] != "0"
 
@@ -697,22 +718,30 @@ async def get_user_activity_context_admin(
 async def deactivate_active_bans(
     conn: asyncpg.Connection,
     user_id: UUID,
+    superseded_by: UUID | None = None,
 ) -> None:
     """Expire every currently-active ban for a user.
 
     Keeps the invariant that a user has at most one active ban, so an admin
     issuing a new ban replaces any existing one rather than stacking.
+
+    `superseded_by` is the admin doing the replacing. Recording it matters
+    because the row this leaves behind -- expires_at in the past, no actor -- is
+    otherwise indistinguishable from a ban that simply ran its course, which
+    defeats the point of keeping the audit trail at all.
     """
     await conn.execute(
-        "UPDATE moderation_bans SET expires_at = NOW() "
+        "UPDATE moderation_bans SET expires_at = NOW(), lifted_by = $2 "
         "WHERE user_id = $1 AND expires_at > NOW()",
         user_id,
+        superseded_by,
     )
 
 
 async def lift_ban(
     conn: asyncpg.Connection,
     ban_id: UUID,
+    lifted_by: UUID | None = None,
 ) -> bool:
     """Lift every active ban for the user that owns `ban_id`.
 
@@ -721,10 +750,11 @@ async def lift_ban(
     """
     result = await conn.execute(
         """
-        UPDATE moderation_bans SET expires_at = NOW()
+        UPDATE moderation_bans SET expires_at = NOW(), lifted_by = $2
         WHERE expires_at > NOW()
           AND user_id = (SELECT user_id FROM moderation_bans WHERE id = $1)
         """,
         ban_id,
+        lifted_by,
     )
     return result.split()[-1] != "0"

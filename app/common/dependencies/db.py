@@ -1,5 +1,5 @@
 from fastapi import Request
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 import asyncpg
 
 

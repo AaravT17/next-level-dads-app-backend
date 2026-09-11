@@ -77,10 +77,12 @@ CREATE TABLE connections (
     requesting_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     requested_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     status        TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'blocked')),
+    note          TEXT,
     created_at    TIMESTAMPTZ DEFAULT now(),
     updated_at    TIMESTAMPTZ DEFAULT now(),
 
-    CONSTRAINT no_self_connection CHECK (requesting_id != requested_id)
+    CONSTRAINT no_self_connection CHECK (requesting_id != requested_id),
+    CONSTRAINT connection_note_length CHECK (note IS NULL OR char_length(note) <= 300)
 );
 
 CREATE UNIQUE INDEX unique_pair ON connections (
@@ -95,6 +97,7 @@ CREATE TABLE communities (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name        VARCHAR(100) NOT NULL,
     description VARCHAR(500),
+    image_url   TEXT,
     created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at  TIMESTAMPTZ DEFAULT now()
 );
@@ -182,18 +185,22 @@ CREATE INDEX ON chat_participants (user_id);
 -- ── Messages ──────────────────────────────────────────────────────────────────
 
 CREATE TABLE messages (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    chat_id     UUID REFERENCES chats(id) ON DELETE CASCADE,
-    sender_id   UUID REFERENCES users(id) ON DELETE SET NULL,
-    reply_to_id UUID REFERENCES messages(id) ON DELETE SET NULL,
-    content     TEXT NOT NULL,
-    edited_at   TIMESTAMPTZ,
-    is_deleted  BOOLEAN DEFAULT false,
-    created_at  TIMESTAMPTZ DEFAULT now()
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    chat_id             UUID REFERENCES chats(id) ON DELETE CASCADE,
+    sender_id           UUID REFERENCES users(id) ON DELETE SET NULL,
+    reply_to_id         UUID REFERENCES messages(id) ON DELETE SET NULL,
+    content             TEXT NOT NULL,
+    -- Set only on a community invite. The message renders as a card linking to
+    -- the community; the recipient joins from there, so there is no invite state.
+    shared_community_id UUID REFERENCES communities(id) ON DELETE SET NULL,
+    edited_at           TIMESTAMPTZ,
+    is_deleted          BOOLEAN DEFAULT false,
+    created_at          TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE INDEX ON messages (chat_id, created_at);
 CREATE INDEX ON messages (reply_to_id);
+CREATE INDEX ON messages (shared_community_id) WHERE shared_community_id IS NOT NULL;
 
 CREATE OR REPLACE FUNCTION bump_chat_updated_at()
 RETURNS TRIGGER AS $$
@@ -338,6 +345,9 @@ CREATE TABLE moderation_filtered_messages (
     layer        TEXT NOT NULL CHECK (layer IN ('profanity', 'hate_speech', 'report')),
     reason       TEXT,
     score        DOUBLE PRECISION,
+    -- NULL when an automatic layer removed the content; set when a moderator
+    -- actioned a report.
+    actioned_by  UUID REFERENCES public.users(id) ON DELETE SET NULL,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -355,6 +365,11 @@ CREATE TABLE moderation_reports (
     reason       TEXT,
     status       TEXT NOT NULL DEFAULT 'pending'
                  CHECK (status IN ('pending', 'reviewed', 'dismissed', 'actioned')),
+    -- The moderator who last decided this report and when. Written for every
+    -- decision, dismissal included -- a dismissal is a call someone made and
+    -- is worth attributing. NULL means no moderator has looked at it yet.
+    actioned_by  UUID REFERENCES public.users(id) ON DELETE SET NULL,
+    actioned_at  TIMESTAMPTZ,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (content_type, content_id, reporter_id)
 );
@@ -369,6 +384,10 @@ CREATE TABLE moderation_bans (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id    UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
     reason     TEXT,
+    -- Who issued the ban and who lifted it early. NULL created_by means an
+    -- automatic layer issued it; expires_at in the past is the lift itself.
+    created_by UUID REFERENCES public.users(id) ON DELETE SET NULL,
+    lifted_by  UUID REFERENCES public.users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ NOT NULL
 );
@@ -403,6 +422,11 @@ CREATE TABLE user_reports (
     reason      TEXT,
     status      TEXT NOT NULL DEFAULT 'pending'
                 CHECK (status IN ('pending', 'reviewed', 'dismissed', 'actioned')),
+    -- The moderator who last decided this report and when. Written for every
+    -- decision, dismissal included -- a dismissal is a call someone made and
+    -- is worth attributing. NULL means no moderator has looked at it yet.
+    actioned_by UUID REFERENCES public.users(id) ON DELETE SET NULL,
+    actioned_at TIMESTAMPTZ,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

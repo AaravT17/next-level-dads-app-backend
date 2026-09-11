@@ -10,7 +10,10 @@ from datetime import datetime
 from app.modules.connections.models import (
     ConnectionProfileResponse,
     ConnectionStatusResponse,
+    SendConnectionRequestBody,
 )
+from app.modules.connections.utils import normalize_connection_note
+from app.modules.moderation.service import assert_not_banned
 
 
 router = APIRouter(
@@ -64,9 +67,21 @@ async def send_connection_request(
     target_user_id: UUID,
     request: Request,
     response: Response,
+    body: SendConnectionRequestBody | None = None,
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    result, created = await connections_service.send_connection_request(conn, UUID(request.state.user_id), target_user_id)
+    curr_user_id = UUID(request.state.user_id)
+
+    note = normalize_connection_note(body.note if body else None)
+    if note is not None:
+        # Only the note is gated on the ban. A ban is for what someone wrote,
+        # so it withdraws the ability to write — not the ability to connect,
+        # which is the plain one-tap request and stays available.
+        await assert_not_banned(conn, curr_user_id)
+
+    result, created = await connections_service.send_connection_request(
+        conn, curr_user_id, target_user_id, note
+    )
     if not created:
         response.status_code = status.HTTP_409_CONFLICT
     return result

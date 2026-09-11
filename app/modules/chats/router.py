@@ -19,6 +19,7 @@ from app.modules.chats.models import (
     UpdateChatNameRequest,
 )
 import app.modules.chats.service as chats_service
+from app.modules.moderation.service import assert_not_banned
 
 router = APIRouter(
     prefix='/api/chats',
@@ -49,6 +50,7 @@ async def create_chat(
     response: Response,
     conn: asyncpg.Connection = Depends(get_db),
 ):
+    await assert_not_banned(conn, UUID(request.state.user_id))
     result = await chats_service.create_chat(conn, request.state.user_id, body)
     response.status_code = status.HTTP_201_CREATED if result['created'] else status.HTTP_200_OK
     return {'id': result['id']}
@@ -98,6 +100,11 @@ async def send_message(
     body: SendMessageRequest,
     conn: asyncpg.Connection = Depends(get_db),
 ):
+    # A ban withdraws the ability to write, and chats were the one write path
+    # that never checked -- so a banned user could keep DMing, which is where
+    # targeted harassment actually happens. Message *content* stays unmoderated
+    # in chats on purpose: a private conversation gets more latitude than a post.
+    await assert_not_banned(conn, UUID(request.state.user_id))
     return await chats_service.send_message(conn, request.state.user_id, chat_id, body)
 
 

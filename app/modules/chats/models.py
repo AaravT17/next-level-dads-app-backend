@@ -2,7 +2,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from uuid import UUID
 from datetime import datetime
 from typing import Literal
-from app.common.config.constants import MAX_NAME_LENGTH
+from app.common.config.constants import (
+    MAX_NAME_LENGTH,
+    COMMUNITY_NAME_MAX_LENGTH,
+    COMMUNITY_DESCRIPTION_MAX_LENGTH,
+)
 
 
 class LastMessageResponse(BaseModel):
@@ -38,6 +42,16 @@ class ReplyToResponse(BaseModel):
     is_deleted: bool
 
 
+class SharedCommunityResponse(BaseModel):
+    """The community attached to an invite message, rendered as a card in the thread."""
+
+    id: UUID
+    name: str = Field(max_length=COMMUNITY_NAME_MAX_LENGTH)
+    description: str | None = Field(None, max_length=COMMUNITY_DESCRIPTION_MAX_LENGTH)
+    image_url: str | None = None
+    member_count: int = Field(ge=0, default=0)
+
+
 class MessageResponse(BaseModel):
     id: UUID
     chat_id: UUID
@@ -46,6 +60,7 @@ class MessageResponse(BaseModel):
     sender_avatar_url: str | None = None
     content: str
     reply_to: ReplyToResponse | None = None
+    shared_community: SharedCommunityResponse | None = None
     edited_at: datetime | None = None
     is_deleted: bool
     created_at: datetime

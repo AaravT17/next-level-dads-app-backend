@@ -1,25 +1,35 @@
 from datetime import datetime
+import time
 from typing import Literal
 from uuid import UUID
 import asyncpg
 from fastapi import HTTPException, status
+from app.common.utils.errors import value_error_to_http
 from app.common.config.constants import (
     COMMUNITIES_PAGE_LIMIT,
+    COMMUNITY_IMAGES_BUCKET,
+    IMAGE_MIME_TO_EXT,
     PROFILES_PAGE_LIMIT,
     CONVERSATIONS_PAGE_LIMIT,
+    RESUME_PAGE_LIMIT,
     MESSAGES_PAGE_LIMIT,
     REPLIES_PAGE_LIMIT,
+    COMMUNITY_INVITE_MESSAGE,
 )
+from app.common.config.supabase import get_supabase_admin
 from app.modules.communities.models import (
     CommunityResponse,
     AuthorInfo,
     ConversationResponse,
     FeedConversationResponse,
+    ResumeConversationResponse,
     MessageResponse,
     ParticipantResponse,
     ReplyResponse,
 )
 from app.modules.users.models import CommunityMemberResponse
+from app.modules.chats.models import SharedCommunityResponse
+import app.modules.chats.service as chats_service
 
 
 REMOVED_CONVERSATION_TITLE = 'Removed post'
@@ -214,8 +224,8 @@ async def discover_communities(
         )
         res = await conn.fetch(query, *params)
         return [CommunityResponse(**dict(r)) for r in res]
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
+    except ValueError as e:
+        raise value_error_to_http(e, 'Failed to fetch communities. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -277,8 +287,8 @@ async def get_community(
         return CommunityResponse(**dict(res))
     except HTTPException:
         raise
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
+    except ValueError as e:
+        raise value_error_to_http(e, 'Failed to fetch community details. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -300,8 +310,8 @@ async def get_community_members(
         )
         res = await conn.fetch(query, *params)
         return [CommunityMemberResponse(**dict(r)) for r in res]
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
+    except ValueError as e:
+        raise value_error_to_http(e, 'Failed to fetch community members. Please try again later.')
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -375,6 +385,145 @@ async def leave_community(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Failed to leave community. Please try again later.',
         )
+
+
+async def update_community_image(
+    conn: asyncpg.Connection,
+    community_id: str,
+    user_id: str,
+    file_contents: bytes,
+    mime_type: str | None,
+) -> str:
+    """Replace a community's photo and return its new public URL.
+
+    Admins only: the photo is how the community presents itself in every list,
+    so changing it is an act of ownership, not ordinary membership.
+    """
+    try:
+        community_id, user_id = UUID(community_id), UUID(user_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid community id.')
+
+    await _assert_community_admin(conn, community_id, user_id)
+
+    image_url = await _upload_community_image_to_storage(community_id, file_contents, mime_type)
+    try:
+        await conn.execute(
+            'UPDATE communities SET image_url = $1 WHERE id = $2',
+            image_url,
+            community_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to update community photo. Please try again later.',
+        )
+    return image_url
+
+
+async def delete_community_image(
+    conn: asyncpg.Connection,
+    community_id: str,
+    user_id: str,
+):
+    try:
+        community_id, user_id = UUID(community_id), UUID(user_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid community id.')
+
+    await _assert_community_admin(conn, community_id, user_id)
+
+    try:
+        await conn.execute('UPDATE communities SET image_url = NULL WHERE id = $1', community_id)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to remove community photo. Please try again later.',
+        )
+    # The row is the source of truth. A file left behind is invisible to every
+    # reader, so a failed storage delete must not fail the request.
+    await _delete_community_image_from_storage(community_id)
+
+
+async def _assert_community_admin(
+    conn: asyncpg.Connection,
+    community_id: UUID,
+    user_id: UUID,
+):
+    """404 when the community is gone, 403 when the caller is not one of its admins."""
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT cm.role
+            FROM communities c
+            LEFT JOIN community_members cm ON cm.community_id = c.id AND cm.user_id = $2
+            WHERE c.id = $1
+            """,
+            community_id,
+            user_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to verify community permissions. Please try again later.',
+        )
+
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Community not found.')
+    if row['role'] != 'admin':
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='Only community admins can change the community photo.',
+        )
+
+
+async def _upload_community_image_to_storage(
+    community_id: UUID,
+    file_contents: bytes,
+    mime_type: str | None,
+) -> str:
+    """Validate mime type, upload the photo to Supabase storage, and return the public URL."""
+    if not mime_type or mime_type not in IMAGE_MIME_TO_EXT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Invalid community photo type. Supported types: PNG, JPG, JPEG.',
+        )
+    supabase_admin = get_supabase_admin()
+    path = str(community_id)
+    try:
+        await supabase_admin.storage.from_(COMMUNITY_IMAGES_BUCKET).upload(
+            path=path,
+            file=file_contents,
+            file_options={'content-type': mime_type, 'upsert': 'true'},
+        )
+        public_url = await supabase_admin.storage.from_(COMMUNITY_IMAGES_BUCKET).get_public_url(path)
+        return _versioned_url(public_url)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to upload community photo. Please try again later.',
+        )
+
+
+def _versioned_url(public_url: str) -> str:
+    """Stamp the stored URL so a replaced photo is not served from cache.
+
+    The file always sits at the same path, so without this every upload returns
+    a URL the browser already has and the old photo keeps showing until a hard
+    refresh. The stamp only ever changes when a new file is uploaded.
+    """
+    stamped = public_url.rstrip('?')
+    separator = '&' if '?' in stamped else '?'
+    return f'{stamped}{separator}v={int(time.time())}'
+
+
+async def _delete_community_image_from_storage(community_id: UUID):
+    supabase_admin = get_supabase_admin()
+    try:
+        await supabase_admin.storage.from_(COMMUNITY_IMAGES_BUCKET).remove([str(community_id)])
+    except Exception:
+        # TODO: Log the exception
+        pass
 
 
 async def list_conversations(
@@ -485,6 +634,94 @@ async def list_feed_conversations(
     """
     params.append(CONVERSATIONS_PAGE_LIMIT)
     return await conn.fetch(query, *params)
+
+
+async def list_resume_conversations(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    limit: int = RESUME_PAGE_LIMIT,
+) -> list[asyncpg.Record]:
+    """Conversations the caller has a stake in, most recently active first.
+
+    A stake is authoring the thread, replying in it, or hearting it. Ordering is
+    by the thread's activity rather than by when the caller acted, because the
+    point of the section is what moved since they last looked -- a thread they
+    posted in a month ago belongs at the top if it got a reply this morning.
+
+    `unseen_reply_count` counts other people's messages added after the caller's
+    own last action on the thread. It uses the same moderation visibility as
+    reply_count so a card cannot promise more replies than the thread will show.
+    """
+    query = f"""
+        SELECT
+            {_CONVERSATION_COLS},
+            comm.name AS community_name,
+            EXISTS (
+                SELECT 1 FROM conversation_hearts ch
+                WHERE ch.conversation_id = c.id AND ch.user_id = $1
+            ) AS is_hearted,
+            CASE
+                WHEN c.author_id = $1 THEN 'authored'
+                WHEN mine.last_message_at IS NOT NULL THEN 'replied'
+                ELSE 'hearted'
+            END AS reason,
+            (
+                SELECT COUNT(*)
+                FROM conversation_messages m2
+                WHERE m2.conversation_id = c.id
+                  AND m2.author_id IS DISTINCT FROM $1
+                  AND NOT m2.is_deleted
+                  AND m2.created_at > mine.acted_at
+                  AND (
+                      EXISTS (
+                          SELECT 1 FROM moderation_filtered_messages mfm
+                          WHERE mfm.content_type = 'message'
+                            AND mfm.content_id = m2.id
+                            AND mfm.layer = 'report'
+                      )
+                      OR NOT EXISTS (
+                          SELECT 1 FROM moderation_filtered_messages mfm
+                          WHERE mfm.content_type = 'message' AND mfm.content_id = m2.id
+                      )
+                  )
+            ) AS unseen_reply_count
+        FROM conversations c
+        LEFT JOIN public.users u ON u.id = c.author_id
+        JOIN communities comm ON comm.id = c.community_id
+        CROSS JOIN LATERAL (
+            SELECT
+                (
+                    SELECT MAX(m.created_at) FROM conversation_messages m
+                    WHERE m.conversation_id = c.id AND m.author_id = $1
+                ) AS last_message_at,
+                -- GREATEST ignores NULLs in Postgres, so this is simply the most
+                -- recent of whichever stakes the caller actually has.
+                GREATEST(
+                    CASE WHEN c.author_id = $1 THEN c.created_at END,
+                    (
+                        SELECT MAX(m.created_at) FROM conversation_messages m
+                        WHERE m.conversation_id = c.id AND m.author_id = $1
+                    ),
+                    (
+                        SELECT ch.created_at FROM conversation_hearts ch
+                        WHERE ch.conversation_id = c.id AND ch.user_id = $1
+                    )
+                ) AS acted_at
+        ) AS mine
+        WHERE NOT c.is_deleted
+        AND {_CONVERSATION_VISIBLE_SQL}
+        AND (
+            c.author_id = $1
+            OR mine.last_message_at IS NOT NULL
+            OR EXISTS (
+                SELECT 1 FROM conversation_hearts ch
+                WHERE ch.conversation_id = c.id AND ch.user_id = $1
+            )
+        )
+        ORDER BY c.last_activity_at DESC, c.id DESC
+        LIMIT $2
+    """
+    return await conn.fetch(query, user_id, limit)
 
 
 async def get_conversation(
@@ -810,6 +1047,15 @@ def record_to_feed_conversation(record: asyncpg.Record) -> FeedConversationRespo
     return FeedConversationResponse(
         **conversation.model_dump(),
         community_name=record["community_name"],
+    )
+
+
+def record_to_resume_conversation(record: asyncpg.Record) -> ResumeConversationResponse:
+    feed = record_to_feed_conversation(record)
+    return ResumeConversationResponse(
+        **feed.model_dump(),
+        reason=record['reason'],
+        unseen_reply_count=record['unseen_reply_count'],
     )
 
 
@@ -1172,3 +1418,77 @@ def _build_get_community_members_query(
     params.append(PROFILES_PAGE_LIMIT)
 
     return query, params
+
+
+async def invite_to_community(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    community_id: UUID,
+    recipient_ids: list[UUID],
+) -> int:
+    """Send each recipient a DM inviting them to a community.
+
+    The invite carries no state of its own — it is a message with the community
+    attached, and the recipient joins from the community page like anyone else.
+    Recipients must be accepted connections, which also rules out inviting
+    yourself and inviting a user that does not exist.
+    """
+    try:
+        community = await conn.fetchrow(
+            """
+            SELECT
+                c.id,
+                c.name,
+                c.description,
+                c.image_url,
+                (SELECT COUNT(*) FROM community_members cm WHERE cm.community_id = c.id) AS member_count
+            FROM communities c
+            WHERE c.id = $1
+            """,
+            community_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to send invites. Please try again later.',
+        )
+
+    if community is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Community not found.')
+
+    try:
+        connections = await conn.fetch(
+            """
+            SELECT (CASE WHEN requesting_id = $1 THEN requested_id ELSE requesting_id END) AS user_id
+            FROM connections
+            WHERE (requesting_id = $1 OR requested_id = $1) AND status = 'accepted'
+            """,
+            user_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to send invites. Please try again later.',
+        )
+
+    connected_ids = {r['user_id'] for r in connections}
+    if any(rid not in connected_ids for rid in recipient_ids):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='You can only invite users with whom you are connected',
+        )
+
+    chat_ids = await chats_service.send_community_invites(
+        conn,
+        sender_id=user_id,
+        recipient_ids=recipient_ids,
+        community=SharedCommunityResponse(
+            id=community['id'],
+            name=community['name'],
+            description=community['description'],
+            image_url=community['image_url'],
+            member_count=community['member_count'] or 0,
+        ),
+        content=COMMUNITY_INVITE_MESSAGE,
+    )
+    return len(chat_ids)

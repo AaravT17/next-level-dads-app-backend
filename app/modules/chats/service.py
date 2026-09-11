@@ -1,5 +1,6 @@
 import asyncpg
 import asyncio
+import logging
 from datetime import datetime
 from uuid import UUID
 from fastapi import status, HTTPException
@@ -23,6 +24,7 @@ from app.modules.chats.models import (
     ChatParticipantResponse,
     AddParticipantsRequest,
     ChatAddableParticipantResponse,
+    SharedCommunityResponse,
 )
 
 
@@ -57,6 +59,24 @@ def _build_chat_preview_row(r) -> ChatResponse:
     )
 
 
+
+def _build_shared_community(r) -> SharedCommunityResponse | None:
+    """The community card on an invite message, or None when there isn't one.
+
+    A deleted message keeps its row but shows as "Message deleted", so the card
+    is withheld too — otherwise deleting an invite would leave the link standing.
+    """
+    if r['shared_community_id'] is None or r['is_deleted']:
+        return None
+    return SharedCommunityResponse(
+        id=r['shared_community_id'],
+        name=r['shared_community_name'],
+        description=r['shared_community_description'],
+        image_url=r['shared_community_image_url'],
+        member_count=r['shared_community_member_count'] or 0,
+    )
+
+
 _CHAT_PREVIEW_QUERY = """
     SELECT
         c.id,
@@ -82,6 +102,23 @@ _CHAT_PREVIEW_QUERY = """
             ELSE c.dm_user_1
         END
 """
+
+
+logger = logging.getLogger(__name__)
+
+# The event loop holds only a *weak* reference to a task, so a fire-and-forget
+# create_task() whose return value is discarded can be garbage-collected before
+# it finishes. That surfaces as a WebSocket event that silently never arrives --
+# rare, unreproducible, and invisible because _publish_event swallows errors.
+# Keeping a strong reference until the task completes is the documented fix.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> None:
+    """Run a coroutine in the background and keep it alive until it finishes."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 async def get_chat_previews(
@@ -166,7 +203,7 @@ async def create_chat(
             detail='Failed to create chat. Please try again later.',
         )
 
-    connected_ids = set(r['user_id'] for r in connections)
+    connected_ids = {r['user_id'] for r in connections}
     if any(pid not in connected_ids for pid in participant_ids):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail='You can only add users with whom you are connected'
@@ -255,11 +292,18 @@ async def get_messages(
             r.content AS reply_to_content,
             r.sender_id AS reply_to_sender_id,
             rs.name AS reply_to_sender_name,
-            r.is_deleted AS reply_to_is_deleted
+            r.is_deleted AS reply_to_is_deleted,
+            m.shared_community_id,
+            sc.name AS shared_community_name,
+            sc.description AS shared_community_description,
+            sc.image_url AS shared_community_image_url,
+            (SELECT COUNT(*) FROM community_members cm WHERE cm.community_id = sc.id)
+                AS shared_community_member_count
         FROM messages m
         LEFT JOIN users s ON s.id = m.sender_id
         LEFT JOIN messages r ON r.id = m.reply_to_id
         LEFT JOIN users rs ON rs.id = r.sender_id
+        LEFT JOIN communities sc ON sc.id = m.shared_community_id
         WHERE {where_clause}
         ORDER BY m.created_at DESC, m.id DESC
         LIMIT ${i}
@@ -311,6 +355,7 @@ async def get_messages(
                 sender_avatar_url=r['sender_avatar_url'],
                 content='' if r['is_deleted'] else r['content'],
                 reply_to=reply_to,
+                shared_community=_build_shared_community(r),
                 edited_at=r['edited_at'],
                 is_deleted=r['is_deleted'],
                 created_at=r['created_at'],
@@ -430,7 +475,7 @@ async def send_message(
     # the sender as well (for their other connections)
 
     # publish to all participants except the sender, fire off as background task, don't delay response
-    asyncio.create_task(
+    _spawn(
         _publish_event(
             publish_to=[pid for pid in validation['participant_ids'] if str(pid) != str(user_id)],
             type='messages:new',
@@ -450,8 +495,7 @@ async def _publish_event(
         try:
             await publish(str(uid), {'user_id': str(uid), 'event_data': {'type': type, 'payload': payload}})
         except Exception:
-            # TODO: Log the exception
-            pass
+            logger.exception('Failed to publish %s event to user %s', type, uid)
 
     await asyncio.gather(*[_safe_publish(uid) for uid in publish_to])
 
@@ -497,7 +541,7 @@ async def edit_message(
             detail='Failed to edit message. Please try again later.',
         )
 
-    asyncio.create_task(
+    _spawn(
         _publish_event(
             publish_to=[pid for pid in result['participant_ids'] if str(pid) != str(user_id)],
             type='messages:edit',
@@ -551,7 +595,7 @@ async def delete_message(
             detail='Failed to delete message. Please try again later.',
         )
 
-    asyncio.create_task(
+    _spawn(
         _publish_event(
             publish_to=[pid for pid in result['participant_ids'] if str(pid) != str(user_id)],
             type='messages:delete',
@@ -820,7 +864,7 @@ async def promote_participant(
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail='You cannot make this participant an admin'
             )
-        await conn.execute(
+        result = await conn.execute(
             """
             UPDATE chat_participants
             SET is_admin = TRUE
@@ -829,6 +873,13 @@ async def promote_participant(
             chat_id,
             participant_id,
         )
+        # A participant_id that is not in this chat matches no row. Without this
+        # the caller gets 204 and believes someone was promoted who was not.
+        if result.split()[-1] == '0':
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail='Participant not found in this chat.',
+            )
         return
     except HTTPException:
         raise
@@ -869,7 +920,7 @@ async def demote_participant(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Chat not found')
         if not validation['is_admin'] or validation['is_owner']:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='You cannot demote this participant.')
-        await conn.execute(
+        result = await conn.execute(
             """
             UPDATE chat_participants
             SET is_admin = FALSE
@@ -878,6 +929,14 @@ async def demote_participant(
             chat_id,
             participant_id,
         )
+        # Same reasoning as promote_participant: a participant_id that is not in
+        # this chat matches no row, and a bare 204 would tell the caller someone
+        # was demoted who was not.
+        if result.split()[-1] == '0':
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail='Participant not found in this chat.',
+            )
         return
     except HTTPException:
         raise
@@ -1005,3 +1064,122 @@ async def mark_chat_read(conn: asyncpg.Connection, user_id: str, chat_id: str) -
         user_id,
         chat_id,
     )
+
+
+async def _get_or_create_dm(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    other_user_id: UUID,
+) -> UUID:
+    """The DM between two users, created on first use.
+
+    Runs inside a savepoint so the losing side of a concurrent create can fall
+    back to the existing row without aborting the caller's transaction.
+    """
+    chat_id = await conn.fetchval(
+        """
+        SELECT id FROM chats
+        WHERE type = 'dm'
+          AND LEAST(dm_user_1, dm_user_2) = LEAST($1::uuid, $2::uuid)
+          AND GREATEST(dm_user_1, dm_user_2) = GREATEST($1::uuid, $2::uuid)
+        """,
+        user_id,
+        other_user_id,
+    )
+    if chat_id is not None:
+        return chat_id
+
+    try:
+        async with conn.transaction():
+            chat_id = await conn.fetchval(
+                "INSERT INTO chats (type, dm_user_1, dm_user_2) VALUES ('dm', $1, $2) RETURNING id",
+                user_id,
+                other_user_id,
+            )
+            await conn.executemany(
+                'INSERT INTO chat_participants (chat_id, user_id) VALUES ($1, $2)',
+                [(chat_id, user_id), (chat_id, other_user_id)],
+            )
+        return chat_id
+    except asyncpg.UniqueViolationError:
+        return await conn.fetchval(
+            """
+            SELECT id FROM chats
+            WHERE type = 'dm'
+              AND LEAST(dm_user_1, dm_user_2) = LEAST($1::uuid, $2::uuid)
+              AND GREATEST(dm_user_1, dm_user_2) = GREATEST($1::uuid, $2::uuid)
+            """,
+            user_id,
+            other_user_id,
+        )
+
+
+async def send_community_invites(
+    conn: asyncpg.Connection,
+    sender_id: UUID,
+    recipient_ids: list[UUID],
+    community: SharedCommunityResponse,
+    content: str,
+) -> list[UUID]:
+    """Drop one invite message into the sender's DM with each recipient.
+
+    All of it in one transaction: an invite that reaches four of five friends is
+    worse than one that fails outright, because the sender cannot tell which.
+    Callers are responsible for validating the recipients and the community.
+    """
+    # Read before writing: the publish below needs it, and a failure here should
+    # cost nothing. After the commit there is no honest way to fail the request.
+    try:
+        sender = await conn.fetchrow('SELECT name, avatar_url FROM users WHERE id = $1', sender_id)
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to send invites. Please try again later.',
+        )
+
+    sent: list[tuple[UUID, UUID, UUID, datetime]] = []
+    try:
+        async with conn.transaction():
+            for recipient_id in recipient_ids:
+                chat_id = await _get_or_create_dm(conn, sender_id, recipient_id)
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO messages (chat_id, sender_id, content, shared_community_id)
+                    VALUES ($1, $2, $3, $4)
+                    RETURNING id, created_at
+                    """,
+                    chat_id,
+                    sender_id,
+                    content,
+                    community.id,
+                )
+                sent.append((recipient_id, chat_id, row['id'], row['created_at']))
+    except Exception as _:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to send invites. Please try again later.',
+        )
+
+    # Published only after the transaction commits, so a recipient that reacts by
+    # fetching the chat cannot beat the rows it is fetching.
+    for recipient_id, chat_id, message_id, created_at in sent:
+        msg = MessageResponse(
+            id=message_id,
+            chat_id=chat_id,
+            sender_id=sender_id,
+            sender_name=sender['name'] if sender else None,
+            sender_avatar_url=sender['avatar_url'] if sender else None,
+            content=content,
+            shared_community=community,
+            is_deleted=False,
+            created_at=created_at,
+        )
+        _spawn(
+            _publish_event(
+                publish_to=[recipient_id],
+                type='messages:new',
+                payload=msg.model_dump(mode='json'),
+            )
+        )
+
+    return [chat_id for _, chat_id, _, _ in sent]
