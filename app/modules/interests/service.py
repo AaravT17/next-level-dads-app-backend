@@ -1,12 +1,12 @@
+import asyncpg
 from fastapi import HTTPException, status
-from app.common.config.supabase import get_supabase
+from app.modules.interests.models import InterestResponse
 
 
-async def get_interests() -> list[str]:
-    supabase = get_supabase()
+async def get_interests(conn: asyncpg.Connection) -> list[InterestResponse]:
     try:
-        res = await supabase.from_('interests').select('name').order('name').execute()
-        return [interest['name'] for interest in res.data]
+        rows = await conn.fetch('SELECT id, slug, name FROM interests ORDER BY name')
+        return [InterestResponse(**dict(r)) for r in rows]
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

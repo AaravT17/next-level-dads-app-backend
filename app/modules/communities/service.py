@@ -3,7 +3,7 @@ from typing import Literal
 from uuid import UUID
 import asyncpg
 from fastapi import HTTPException, status
-from app.common.config.constants import (
+from app.common.constants import (
     COMMUNITIES_PAGE_LIMIT,
     PROFILES_PAGE_LIMIT,
     CONVERSATIONS_PAGE_LIMIT,
@@ -12,6 +12,7 @@ from app.common.config.constants import (
 )
 from app.modules.communities.models import (
     CommunityResponse,
+    CommunityMemberResponse,
     AuthorInfo,
     ConversationResponse,
     FeedConversationResponse,
@@ -19,7 +20,6 @@ from app.modules.communities.models import (
     ParticipantResponse,
     ReplyResponse,
 )
-from app.modules.users.models import CommunityMemberResponse
 
 
 REMOVED_CONVERSATION_TITLE = 'Removed post'

@@ -1,7 +1,7 @@
 import os
 from fastapi import HTTPException, Response, status
 from supabase_auth.errors import AuthApiError
-from app.common.config.constants import IS_PRODUCTION, REFRESH_TOKEN_EXPIRY_DAYS
+from app.common.constants import IS_PRODUCTION, REFRESH_TOKEN_EXPIRY_DAYS
 from app.common.config.supabase import get_supabase
 
 

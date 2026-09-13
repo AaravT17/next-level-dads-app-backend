@@ -1,7 +1,7 @@
 from uuid import UUID
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
-from app.common.config.constants import IS_PRODUCTION
+from app.common.constants import IS_PRODUCTION
 from app.common.dependencies.rate_limiting import ReportContentLimiter, ReportUserLimiter
 from app.common.dependencies.auth import get_consented_user
 from app.common.dependencies.db import get_db

@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
 from uuid import UUID
-from app.common.config.constants import (
+from app.common.constants import (
     MAX_NAME_LENGTH,
     MAX_CITY_LENGTH,
     MAX_BIO_LENGTH,
@@ -16,7 +16,7 @@ from app.common.config.constants import (
     MIN_ICEBREAKERS,
     MAX_ICEBREAKERS,
 )
-from typing import Literal
+from app.common.types import ConnectionStatus
 from datetime import datetime, date
 
 
@@ -52,10 +52,6 @@ class UserBase(BaseModel):
     interests: list[InterestItemResponse] = []
     children_age_ranges: list[str] = []
     kid_count: int | None = Field(default=None, ge=0, lt=100)
-    goals: list[str] | None = None
-    primary_goal: str | None = None
-    connection_styles: list[str] | None = None
-    match_priorities: list[str] | None = None
     icebreakers: list[IcebreakerEntry] | None = None
 
 
@@ -69,6 +65,10 @@ class LegalAcceptancesData(BaseModel):
 
 
 class MeResponse(UserBase):
+    goals: list[str] | None = None
+    primary_goal: str | None = None
+    connection_styles: list[str] | None = None
+    match_priorities: list[str] | None = None
     is_admin: bool = False
     preferences: PreferencesData
     legal_acceptances: LegalAcceptancesData
@@ -76,14 +76,7 @@ class MeResponse(UserBase):
 
 class UserProfileResponse(UserBase):
     created_at: datetime
-    connection_status: Literal['pending_incoming', 'pending_outgoing', 'connected', 'blocked'] | None = None
-
-
-# TODO: The CommunityMemberResponse model contains fields not required/used by the frontend, can be trimmed
-class CommunityMemberResponse(UserBase):
-    created_at: datetime
-    joined_at: datetime
-    role: Literal['admin', 'member'] = Field(default='member')
+    connection_status: ConnectionStatus = None
 
 
 class CreateProfileRequest(BaseModel):

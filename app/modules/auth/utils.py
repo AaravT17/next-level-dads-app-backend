@@ -1,5 +1,5 @@
 import re
-from app.common.config.constants import MIN_PASSWORD_LENGTH, PASSWORD_SPECIAL_CHARACTERS
+from app.common.constants import MIN_PASSWORD_LENGTH, PASSWORD_SPECIAL_CHARACTERS
 
 
 def validate_password_strength(pwd: str) -> str:

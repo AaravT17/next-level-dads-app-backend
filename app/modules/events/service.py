@@ -1,11 +1,9 @@
 from uuid import UUID
 from datetime import datetime
 from typing import Literal
-
 import asyncpg
 from fastapi import HTTPException, status
-
-from app.common.config.constants import EVENTS_PAGE_LIMIT
+from app.common.constants import EVENTS_PAGE_LIMIT
 from app.modules.events.models import EventResponse
 
 
@@ -151,40 +149,40 @@ async def get_user_events(
 def _build_discover_events_query(
     user_id: UUID,
     name: str | None = None,
-    event_type: Literal["local", "virtual"] | None = None,
+    event_type: Literal['local', 'virtual'] | None = None,
     is_free: bool | None = None,
     cursor_id: UUID | None = None,
     cursor_starts_at: datetime | None = None,
 ) -> tuple[str, list]:
     conditions = [
-        "NOT EXISTS (SELECT 1 FROM event_attendees ea WHERE ea.event_id = e.id AND ea.user_id = $1)",
-        "e.starts_at >= NOW()",
+        'NOT EXISTS (SELECT 1 FROM event_attendees ea WHERE ea.event_id = e.id AND ea.user_id = $1)',
+        'e.starts_at >= NOW()',
     ]
     params = [user_id]
     i = 2
 
     if name:
-        conditions.append(f"e.name ILIKE ${i}")
-        params.append(f"%{name}%")
+        conditions.append(f'e.name ILIKE ${i}')
+        params.append(f'%{name}%')
         i += 1
 
     if event_type:
-        conditions.append(f"e.type = ${i}")
+        conditions.append(f'e.type = ${i}')
         params.append(event_type)
         i += 1
 
     if is_free is not None:
         if is_free:
-            conditions.append("e.price_cad = 0")
+            conditions.append('e.price_cad = 0')
         else:
-            conditions.append("e.price_cad > 0")
+            conditions.append('e.price_cad > 0')
 
     if cursor_starts_at and cursor_id:
-        conditions.append(f"(e.starts_at, e.id) > (${i}, ${i + 1})")
+        conditions.append(f'(e.starts_at, e.id) > (${i}, ${i + 1})')
         params.extend([cursor_starts_at, cursor_id])
         i += 2
 
-    where_clause = " AND ".join(conditions)
+    where_clause = ' AND '.join(conditions)
     query = f"""
         SELECT e.*,
         (SELECT COUNT(*) FROM event_attendees ea WHERE ea.event_id = e.id) AS attendee_count,
@@ -205,21 +203,21 @@ def _build_get_user_events_query(
     cursor_id: UUID | None = None,
     cursor_starts_at: datetime | None = None,
 ) -> tuple[str, list]:
-    conditions = ["ea.user_id = $1"]
+    conditions = ['ea.user_id = $1']
     params = [user_id]
     i = 2
 
     if name:
-        conditions.append(f"e.name ILIKE ${i}")
-        params.append(f"%{name}%")
+        conditions.append(f'e.name ILIKE ${i}')
+        params.append(f'%{name}%')
         i += 1
 
     if cursor_starts_at and cursor_id:
-        conditions.append(f"(e.starts_at, e.id) > (${i}, ${i + 1})")
+        conditions.append(f'(e.starts_at, e.id) > (${i}, ${i + 1})')
         params.extend([cursor_starts_at, cursor_id])
         i += 2
 
-    where_clause = " AND ".join(conditions)
+    where_clause = ' AND '.join(conditions)
     query = f"""
         SELECT e.*,
         (SELECT COUNT(*) FROM event_attendees ea WHERE ea.event_id = e.id) AS attendee_count,

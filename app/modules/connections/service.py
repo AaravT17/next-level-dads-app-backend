@@ -2,7 +2,7 @@ from datetime import datetime
 from uuid import UUID
 import asyncpg
 from fastapi import HTTPException, status
-from app.common.config.constants import (
+from app.common.constants import (
     PROFILES_PAGE_LIMIT,
 )
 from app.modules.connections.models import (

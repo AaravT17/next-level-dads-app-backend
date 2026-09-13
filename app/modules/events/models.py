@@ -3,7 +3,7 @@ from uuid import UUID
 from datetime import datetime
 from typing import Literal
 from decimal import Decimal
-from app.common.config.constants import (
+from app.common.constants import (
     EVENT_DESCRIPTION_MAX_LENGTH,
     EVENT_LOCATION_MAX_LENGTH,
     EVENT_NAME_MAX_LENGTH,

@@ -2,7 +2,7 @@ import json
 import asyncpg
 from fastapi import HTTPException, status
 from app.common.config.supabase import get_supabase_admin
-from app.common.config.constants import AGE_RANGES, IMAGE_MIME_TO_EXT, PROFILES_PAGE_LIMIT
+from app.common.constants import AGE_RANGES, IMAGE_MIME_TO_EXT, PROFILES_PAGE_LIMIT
 from app.modules.users.models import (
     MeResponse,
     UserProfileResponse,
@@ -228,9 +228,9 @@ async def update_profile(
             # Handle icebreakers (JSONB serialization)
             if 'icebreakers' in body.model_fields_set:
                 set_clauses.append(f'icebreakers = ${i}')
-                params.append(json.dumps(
-                    [{'prompt_slug': e.prompt_slug, 'answer': e.answer} for e in body.icebreakers]
-                ))
+                params.append(
+                    json.dumps([{'prompt_slug': e.prompt_slug, 'answer': e.answer} for e in body.icebreakers])
+                )
                 i += 1
 
             if set_clauses:
@@ -463,12 +463,16 @@ def _build_discover_profiles_query(
         conditions.append(f'({" OR ".join(range_conditions)})')
 
     if interests:
-        conditions.append(f'u.interests && ${i}::text[]')
+        conditions.append(f"""EXISTS (
+            SELECT 1 FROM public.user_interests ui
+            JOIN public.interests intr ON intr.id = ui.interest_id
+            WHERE ui.user_id = u.id AND intr.slug = ANY(${i}::text[])
+        )""")
         params.append(interests)
         i += 1
 
     if children_age_ranges:
-        conditions.append(f'u.children && ${i}::text[]')
+        conditions.append(f'u.children_age_ranges && ${i}::text[]')
         params.append(children_age_ranges)
         i += 1
 

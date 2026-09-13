@@ -8,7 +8,7 @@ from app.modules.auth.models import (
 )
 from app.common.dependencies.auth import get_current_access_token
 import app.modules.auth.service as auth_service
-from app.common.config.constants import IS_PRODUCTION
+from app.common.constants import IS_PRODUCTION
 from app.common.dependencies.rate_limiting import (
     RegisterLimiter,
     LoginLimiter,

@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 from app.common.config.supabase import init_supabase
 import asyncpg
 from fastapi_limiter import FastAPILimiter
-from app.common.config.constants import IS_PRODUCTION
+from app.common.constants import IS_PRODUCTION
 
 
 @asynccontextmanager

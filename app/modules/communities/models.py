@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
-from app.common.config.constants import (
+from app.common.constants import (
     COMMUNITY_NAME_MAX_LENGTH,
     COMMUNITY_DESCRIPTION_MAX_LENGTH,
     CONVERSATION_TITLE_MIN_LENGTH,
@@ -9,19 +9,25 @@ from app.common.config.constants import (
     CONVERSATION_BODY_MAX_LENGTH,
 )
 from typing import Literal
+from app.modules.users.models import UserBase
+
+
+# TODO: Contains fields not required/used by the frontend, can be trimmed
+class CommunityMemberResponse(UserBase):
+    created_at: datetime
+    joined_at: datetime
+    role: Literal['admin', 'member'] = Field(default='member')
 
 
 class CommunityResponse(BaseModel):
     id: UUID
     name: str = Field(max_length=COMMUNITY_NAME_MAX_LENGTH)
-    description: str | None = Field(
-        max_length=COMMUNITY_DESCRIPTION_MAX_LENGTH, default=None
-    )
+    description: str | None = Field(max_length=COMMUNITY_DESCRIPTION_MAX_LENGTH, default=None)
     member_count: int = Field(ge=0, default=0)
     created_by: UUID | None = None
     created_at: datetime
     is_member: bool = False
-    role: Literal["admin", "member"] | None = None
+    role: Literal['admin', 'member'] | None = None
 
 
 class AuthorInfo(BaseModel):

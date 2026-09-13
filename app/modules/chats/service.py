@@ -3,7 +3,7 @@ import asyncio
 from datetime import datetime
 from uuid import UUID
 from fastapi import status, HTTPException
-from app.common.config.constants import (
+from app.common.constants import (
     CHAT_PREVIEWS_PAGE_LIMIT,
     CHAT_MESSAGES_PAGE_LIMIT,
     CHAT_PARTICIPANTS_PAGE_LIMIT,

@@ -7,7 +7,7 @@ from fastapi import (
     status,
     Request,
 )
-from app.common.config.constants import IS_PRODUCTION
+from app.common.constants import IS_PRODUCTION
 from app.common.dependencies.rate_limiting import (
     CreateProfileLimiter,
     DiscoverProfilesLimiter,

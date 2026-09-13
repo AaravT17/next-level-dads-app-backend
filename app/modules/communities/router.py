@@ -1,5 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Query, Body, Request
-from app.common.config.constants import IS_PRODUCTION
+from app.common.constants import IS_PRODUCTION
 from app.common.dependencies.rate_limiting import (
     CreateCommunityLimiter,
     CreateConversationLimiter,
@@ -8,8 +8,7 @@ from app.common.dependencies.rate_limiting import (
 )
 from typing import Literal
 from app.common.dependencies.auth import get_consented_user
-from app.modules.communities.models import CommunityResponse
-from app.modules.users.models import CommunityMemberResponse
+from app.modules.communities.models import CommunityResponse, CommunityMemberResponse
 from app.common.dependencies.db import get_db, get_pool
 from app.modules.moderation.models import ContentType
 from app.modules.moderation.service import assert_not_banned, moderate_content

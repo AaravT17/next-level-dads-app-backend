@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, status, Query, Request, Response
-from app.common.config.constants import IS_PRODUCTION
+from app.common.constants import IS_PRODUCTION
 from app.common.dependencies.rate_limiting import CreateChatLimiter, SendChatMessageLimiter
 from app.common.dependencies.auth import get_consented_user
 from app.common.dependencies.db import get_db
