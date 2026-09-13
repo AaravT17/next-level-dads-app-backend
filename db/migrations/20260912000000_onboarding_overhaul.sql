@@ -11,67 +11,67 @@ ALTER TABLE interests ADD COLUMN slug TEXT;
 
 
 -- 1b. Merge interests that map many-to-one (prod data migration)
---     Pattern: rename survivor, set slug, remap users from doomed row, delete doomed row.
---     These are no-ops on a fresh DB (WHERE clauses match nothing).
+--
+--     Each group names a target and the source rows folded into it. The target
+--     is created first, then every user holding a source interest is moved onto
+--     it, then the sources are dropped.
+--
+--     Creating the target first is what makes this safe across databases that
+--     hold different subsets of these names. The earlier form renamed one
+--     nominated source into the target and then read the target back with a
+--     scalar subquery -- which returned NULL, not "no rows", on any database
+--     where that particular source was absent but another source was present,
+--     and NULL fails user_interests.interest_id NOT NULL. Our two production
+--     databases differ in exactly that way: one has 'Food' and never had
+--     'Cooking'.
+--
+--     The target may end up with a fresh id rather than inheriting a source's.
+--     Nothing depends on that: user_interests is the only table referencing
+--     interests(id), and every row of it is remapped here.
 
--- Food + Cooking → food
-UPDATE interests SET name = 'Food & Cooking', slug = 'food' WHERE name = 'Cooking';
-INSERT INTO user_interests (user_id, interest_id)
-SELECT ui.user_id, (SELECT id FROM interests WHERE name = 'Food & Cooking')
-FROM user_interests ui
-JOIN interests i ON i.id = ui.interest_id
-WHERE i.name = 'Food'
-ON CONFLICT DO NOTHING;
-DELETE FROM interests WHERE name = 'Food';
+DO $$
+DECLARE
+    grp RECORD;
+BEGIN
+    FOR grp IN
+        SELECT * FROM (VALUES
+            ('Food & Cooking',       'food',               ARRAY['Cooking', 'Food']),
+            ('DIY & Home Projects',  'diy',                ARRAY['Diy', 'Home Projects']),
+            ('Movies & TV',          'movies-tv',          ARRAY['Movies']),
+            ('Health & Wellness',    'health-wellness',    ARRAY['Mental Wellness']),
+            ('Faith & Spirituality', 'faith-spirituality', ARRAY['Faith']),
+            ('Sports',               'sports',             ARRAY['Soccer']),
+            ('Fitness',              'fitness',            ARRAY['Running', 'Martial Arts'])
+        ) AS t(target_name, target_slug, source_names)
+    LOOP
+        INSERT INTO interests (name, slug)
+        VALUES (grp.target_name, grp.target_slug)
+        ON CONFLICT (name) DO UPDATE SET slug = EXCLUDED.slug;
 
--- DIY + Home Projects → diy
-UPDATE interests SET name = 'DIY & Home Projects', slug = 'diy' WHERE name = 'Diy';
-INSERT INTO user_interests (user_id, interest_id)
-SELECT ui.user_id, (SELECT id FROM interests WHERE name = 'DIY & Home Projects')
-FROM user_interests ui
-JOIN interests i ON i.id = ui.interest_id
-WHERE i.name = 'Home Projects'
-ON CONFLICT DO NOTHING;
-DELETE FROM interests WHERE name = 'Home Projects';
+        INSERT INTO user_interests (user_id, interest_id)
+        SELECT ui.user_id, target.id
+        FROM user_interests ui
+        JOIN interests src    ON src.id = ui.interest_id
+        JOIN interests target ON target.name = grp.target_name
+        WHERE src.name = ANY (grp.source_names)
+        ON CONFLICT DO NOTHING;
 
--- Movies → Movies & TV
-UPDATE interests SET name = 'Movies & TV', slug = 'movies-tv' WHERE name = 'Movies';
-
--- Mental Wellness → Health & Wellness
-UPDATE interests SET name = 'Health & Wellness', slug = 'health-wellness' WHERE name = 'Mental Wellness';
-
--- Faith → Faith & Spirituality
-UPDATE interests SET name = 'Faith & Spirituality', slug = 'faith-spirituality' WHERE name = 'Faith';
-
--- Soccer → merge into Sports
-UPDATE interests SET slug = 'sports' WHERE name = 'Sports';
-INSERT INTO user_interests (user_id, interest_id)
-SELECT ui.user_id, (SELECT id FROM interests WHERE name = 'Sports')
-FROM user_interests ui
-JOIN interests i ON i.id = ui.interest_id
-WHERE i.name = 'Soccer'
-ON CONFLICT DO NOTHING;
-DELETE FROM interests WHERE name = 'Soccer';
-
--- Running, Martial Arts → merge into Fitness
-UPDATE interests SET slug = 'fitness' WHERE name = 'Fitness';
-INSERT INTO user_interests (user_id, interest_id)
-SELECT ui.user_id, (SELECT id FROM interests WHERE name = 'Fitness')
-FROM user_interests ui
-JOIN interests i ON i.id = ui.interest_id
-WHERE i.name IN ('Running', 'Martial Arts')
-ON CONFLICT DO NOTHING;
-DELETE FROM interests WHERE name IN ('Running', 'Martial Arts');
+        DELETE FROM interests WHERE name = ANY (grp.source_names);
+    END LOOP;
+END
+$$;
 
 
--- 1c. Delete all non-curated interests (cascade removes user_interests rows)
---     This catches deprecated interests (Parenting, Wine, Coffee, Writing, etc.)
---     and any custom user-created interests.
-DELETE FROM interests WHERE slug IS NULL;
-
-
--- 1d. Upsert the full curated set of 30 interests
+-- 1c. Upsert the full curated set of 30 interests
 --     Existing rows get their slug set/corrected, missing rows get inserted.
+--
+--     This runs BEFORE the delete below, and the order is load-bearing. Step 1b
+--     only assigns slugs to the seven merge targets, so a curated-but-unmerged
+--     interest -- Gaming, Golf, Travel, and twenty more -- still has a NULL slug
+--     at this point. Deleting first would cascade every user's link to all of
+--     them away and then re-seed the names as empty rows, quietly stripping most
+--     users of most of their interests. Setting the slugs first means the delete
+--     that follows only reaches genuinely non-curated names.
 INSERT INTO interests (name, slug) VALUES
     ('Sports',               'sports'),
     ('Fitness',              'fitness'),
@@ -104,6 +104,14 @@ INSERT INTO interests (name, slug) VALUES
     ('Faith & Spirituality', 'faith-spirituality'),
     ('Health & Wellness',    'health-wellness')
 ON CONFLICT (name) DO UPDATE SET slug = EXCLUDED.slug;
+
+
+-- 1d. Delete all non-curated interests (cascade removes user_interests rows)
+--     Everything curated now carries a slug, so what is left with a NULL slug is
+--     genuinely deprecated (Parenting, Wine, Coffee, Writing, ...) or a custom
+--     user-created interest. Those users do lose the selection -- that is the
+--     intent of curating the list.
+DELETE FROM interests WHERE slug IS NULL;
 
 
 -- 1e. Add NOT NULL and UNIQUE constraints on slug
