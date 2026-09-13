@@ -74,6 +74,41 @@ MAX_BIO_LENGTH = 500
 # introduction to help the recipient decide, not the conversation itself.
 CONNECTION_NOTE_MAX_LENGTH = 300
 PROFILES_PAGE_LIMIT = 20
+MIN_INTERESTS = 3
+MAX_INTERESTS = 7
+MIN_ICEBREAKERS = 1
+MAX_ICEBREAKERS = 3
+MAX_ICEBREAKER_ANSWER_LENGTH = 250
+
+CHILDREN_AGE_RANGES = {'Expecting', 'Newborn', 'Toddler', 'Preschool', 'Elementary', 'Teen', 'Adult'}
+
+PROVINCES = {'AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'SK', 'YT'}
+
+GOALS = {'dad-friends', 'events', 'playdates', 'advice', 'communities', 'resources', 'experts'}
+
+CONNECTION_STYLES = {'close', 'casual', 'activity', 'family', 'playdate', 'gets-it'}
+
+MATCH_PRIORITIES = {'nearby', 'kid-ages', 'interests', 'connection-type', 'age', 'no-preference'}
+
+INTEREST_SLUGS = {
+    'sports', 'fitness', 'golf', 'outdoors', 'gaming', 'food', 'music',
+    'movies-tv', 'comedy', 'theatre', 'true-crime', 'travel', 'tech', 'cars',
+    'reading', 'photography', 'podcasts', 'art', 'fashion', 'collectibles',
+    'history', 'diy', 'board-games', 'pets', 'gardening', 'volunteering',
+    'finance', 'entrepreneurship', 'faith-spirituality', 'health-wellness',
+}
+
+ICEBREAKER_PROMPT_SLUGS = {
+    'fatherhood-taught-me', 'favourite-thing-with-kids', 'wish-id-known',
+    'dad-skill', 'hoping-to-meet', 'get-along-if', 'ideal-hangout',
+    'always-down-to', 'life-goal', 'ask-me-about', 'currently-obsessed',
+    'perfect-weekend', 'want-to-learn', 'wont-shut-up', 'unpopular-opinion',
+    'way-to-my-heart', 'dad-joke', 'weirdly-competitive', 'hill-ill-die-on',
+    'guilty-pleasure', 'dream-dinner-guest', 'settle-this',
+    'dream-travel-destination', 'bucket-list', 'party-story', 'fun-fact',
+    'proudest-achievement', 'two-truths-and-a-lie', 'biggest-pet-peeve',
+    'random-fact-i-love', 'favourite-quote', 'dad-stereotype',
+}
 
 # --- Communities ---
 COMMUNITY_NAME_MAX_LENGTH = 100

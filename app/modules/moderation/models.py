@@ -2,33 +2,31 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from uuid import UUID
-
 from pydantic import BaseModel, Field
-
 from app.common.config.constants import MODERATION_REPORT_REASON_MAX_LENGTH
 
 
 class ContentType(str, Enum):
     """A piece of user content the moderation service can act on."""
 
-    CONVERSATION = "conversation"
-    MESSAGE = "message"
-    REPLY = "reply"
+    CONVERSATION = 'conversation'
+    MESSAGE = 'message'
+    REPLY = 'reply'
 
 
 class ModerationLayer(str, Enum):
     """Which layer flagged the content (also used as the audit `layer`)."""
 
-    PROFANITY = "profanity"
-    HATE_SPEECH = "hate_speech"
-    REPORT = "report"
+    PROFANITY = 'profanity'
+    HATE_SPEECH = 'hate_speech'
+    REPORT = 'report'
 
 
 class NotificationType(str, Enum):
     """Kind of moderation notification shown to a user."""
 
-    CONTENT_REMOVED = "content_removed"
-    TEMPORARY_BAN = "temporary_ban"
+    CONTENT_REMOVED = 'content_removed'
+    TEMPORARY_BAN = 'temporary_ban'
 
 
 @dataclass(frozen=True)
@@ -41,7 +39,7 @@ class ModerationResult:
     score: float | None = None
 
     @classmethod
-    def clean(cls) -> "ModerationResult":
+    def clean(cls) -> 'ModerationResult':
         return cls(flagged=False)
 
 
@@ -51,9 +49,7 @@ class ModerationResult:
 class ReportCreate(BaseModel):
     content_type: ContentType
     content_id: UUID
-    reason: str | None = Field(
-        default=None, max_length=MODERATION_REPORT_REASON_MAX_LENGTH
-    )
+    reason: str | None = Field(default=None, max_length=MODERATION_REPORT_REASON_MAX_LENGTH)
 
 
 class ReportResponse(BaseModel):
@@ -88,9 +84,7 @@ class BanStatusResponse(BaseModel):
 
 class UserReportCreate(BaseModel):
     reported_id: UUID
-    reason: str | None = Field(
-        default=None, max_length=MODERATION_REPORT_REASON_MAX_LENGTH
-    )
+    reason: str | None = Field(default=None, max_length=MODERATION_REPORT_REASON_MAX_LENGTH)
 
 
 class UserReportResponse(BaseModel):
@@ -155,4 +149,4 @@ class AdminBanCreate(BaseModel):
 
 
 class AdminReportStatusUpdate(BaseModel):
-    status: str = Field(pattern="^(reviewed|dismissed|actioned)$")
+    status: str = Field(pattern='^(reviewed|dismissed|actioned)$')

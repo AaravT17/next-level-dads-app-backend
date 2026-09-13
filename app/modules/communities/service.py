@@ -16,9 +16,11 @@ from app.common.config.constants import (
     REPLIES_PAGE_LIMIT,
     COMMUNITY_INVITE_MESSAGE,
 )
+import json
 from app.common.config.supabase import get_supabase_admin
 from app.modules.communities.models import (
     CommunityResponse,
+    CommunityMemberResponse,
     AuthorInfo,
     ConversationResponse,
     FeedConversationResponse,
@@ -27,7 +29,6 @@ from app.modules.communities.models import (
     ParticipantResponse,
     ReplyResponse,
 )
-from app.modules.users.models import CommunityMemberResponse
 from app.modules.chats.models import SharedCommunityResponse
 import app.modules.chats.service as chats_service
 
@@ -309,7 +310,15 @@ async def get_community_members(
             cursor_joined_at=cursor_joined_at,
         )
         res = await conn.fetch(query, *params)
-        return [CommunityMemberResponse(**dict(r)) for r in res]
+        results = []
+        for r in res:
+            data = dict(r)
+            # The user_profiles view hands these back as JSON strings.
+            data['interests'] = [json.loads(i) for i in data.get('interests', [])]
+            if data.get('icebreakers') is not None:
+                data['icebreakers'] = json.loads(data['icebreakers'])
+            results.append(CommunityMemberResponse(**data))
+        return results
     except ValueError as e:
         raise value_error_to_http(e, 'Failed to fetch community members. Please try again later.')
     except Exception:

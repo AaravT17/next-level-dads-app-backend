@@ -10,6 +10,14 @@ from app.common.config.constants import (
     CONVERSATION_BODY_MAX_LENGTH,
 )
 from typing import Literal
+from app.modules.users.models import UserBase
+
+
+# TODO: Contains fields not required/used by the frontend, can be trimmed
+class CommunityMemberResponse(UserBase):
+    created_at: datetime
+    joined_at: datetime
+    role: Literal['admin', 'member'] = Field(default='member')
 
 
 class CommunityResponse(BaseModel):
@@ -23,7 +31,7 @@ class CommunityResponse(BaseModel):
     created_by: UUID | None = None
     created_at: datetime
     is_member: bool = False
-    role: Literal["admin", "member"] | None = None
+    role: Literal['admin', 'member'] | None = None
 
 
 class AuthorInfo(BaseModel):

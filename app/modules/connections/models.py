@@ -1,27 +1,17 @@
 from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
-from typing import Literal
-from app.common.config.constants import MAX_BIO_LENGTH, CONNECTION_NOTE_MAX_LENGTH
+from app.common.config.constants import CONNECTION_NOTE_MAX_LENGTH
+from app.common.types import ConnectionStatus
+from app.modules.users.models import UserBase
 
 
-class ConnectionProfileResponse(BaseModel):
-    id: UUID
-    name: str
-    age: int = Field(ge=0)
-    city: str
-    province: str = Field(min_length=2, max_length=2)
-    about: str = Field(max_length=MAX_BIO_LENGTH)
-    avatar_url: str | None
-    interests: list[str] = []
-    children: list[str] = []
+class ConnectionProfileResponse(UserBase):
     created_at: datetime
     connection_id: UUID
     connection_updated_at: datetime
     note: str | None = Field(None, max_length=CONNECTION_NOTE_MAX_LENGTH)
-    connection_status: (
-        Literal["pending_incoming", "pending_outgoing", "connected", "blocked"] | None
-    ) = None
+    connection_status: ConnectionStatus = None
 
 
 class SendConnectionRequestBody(BaseModel):
@@ -35,6 +25,4 @@ class SendConnectionRequestBody(BaseModel):
 
 
 class ConnectionStatusResponse(BaseModel):
-    connection_status: (
-        Literal["pending_incoming", "pending_outgoing", "connected", "blocked"] | None
-    ) = None
+    connection_status: ConnectionStatus = None

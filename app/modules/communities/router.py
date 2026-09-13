@@ -22,8 +22,7 @@ from app.common.dependencies.rate_limiting import (
 )
 from typing import Literal
 from app.common.dependencies.auth import get_consented_user
-from app.modules.communities.models import CommunityResponse
-from app.modules.users.models import CommunityMemberResponse
+from app.modules.communities.models import CommunityResponse, CommunityMemberResponse
 from app.common.utils.errors import value_error_to_http
 from app.common.dependencies.db import get_db, get_pool
 from app.modules.moderation.models import ContentType

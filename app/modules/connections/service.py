@@ -9,6 +9,7 @@ from app.modules.connections.models import (
     ConnectionProfileResponse,
     ConnectionStatusResponse,
 )
+import json
 from app.modules.connections.utils import resolve_connection_status
 
 
@@ -27,7 +28,14 @@ async def get_connections(
             cursor_updated_at=cursor_updated_at,
         )
         res = await conn.fetch(query, *params)
-        return [ConnectionProfileResponse(**dict(r)) for r in res]
+        results = []
+        for r in res:
+            data = dict(r)
+            data['interests'] = [json.loads(i) for i in data.get('interests', [])]
+            if data.get('icebreakers') is not None:
+                data['icebreakers'] = json.loads(data['icebreakers'])
+            results.append(ConnectionProfileResponse(**data))
+        return results
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -50,7 +58,14 @@ async def get_incoming_requests(
             cursor_updated_at=cursor_updated_at,
         )
         res = await conn.fetch(query, *params)
-        return [ConnectionProfileResponse(**dict(r)) for r in res]
+        results = []
+        for r in res:
+            data = dict(r)
+            data['interests'] = [json.loads(i) for i in data.get('interests', [])]
+            if data.get('icebreakers') is not None:
+                data['icebreakers'] = json.loads(data['icebreakers'])
+            results.append(ConnectionProfileResponse(**data))
+        return results
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -73,7 +88,14 @@ async def get_outgoing_requests(
             cursor_updated_at=cursor_updated_at,
         )
         res = await conn.fetch(query, *params)
-        return [ConnectionProfileResponse(**dict(r)) for r in res]
+        results = []
+        for r in res:
+            data = dict(r)
+            data['interests'] = [json.loads(i) for i in data.get('interests', [])]
+            if data.get('icebreakers') is not None:
+                data['icebreakers'] = json.loads(data['icebreakers'])
+            results.append(ConnectionProfileResponse(**data))
+        return results
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
