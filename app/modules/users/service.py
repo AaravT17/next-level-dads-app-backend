@@ -23,6 +23,9 @@ async def get_me(conn: asyncpg.Connection, user_id: str) -> MeResponse:
         if not res:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User not found.')
         data = dict(res)
+        data['interests'] = [json.loads(i) for i in data.get('interests', [])]
+        if data.get('icebreakers') is not None:
+            data['icebreakers'] = json.loads(data['icebreakers'])
         data['preferences'] = json.loads(data['preferences'])
         data['legal_acceptances'] = json.loads(data['legal_acceptances'])
         return MeResponse(**data)
@@ -41,8 +44,12 @@ async def get_user_profile(conn: asyncpg.Connection, user_id: str, curr_user_id:
         res = await conn.fetchrow(query, *params)
         if not res:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='User not found.')
+        data = {k: v for k, v in dict(res).items() if k not in ('requesting_id', 'connection_status')}
+        data['interests'] = [json.loads(i) for i in data.get('interests', [])]
+        if data.get('icebreakers') is not None:
+            data['icebreakers'] = json.loads(data['icebreakers'])
         return UserProfileResponse(
-            **{k: v for k, v in dict(res).items() if k not in ('requesting_id', 'connection_status')},
+            **data,
             connection_status=resolve_connection_status(
                 UUID(curr_user_id),
                 res['requesting_id'],
@@ -172,13 +179,17 @@ async def discover_profiles(
             cursor_created_at=cursor_created_at,
         )
         res = await conn.fetch(query, *params)
-        return [
-            UserProfileResponse(
-                **{k: v for k, v in dict(r).items() if k not in ('requesting_id', 'connection_status')},
+        profiles = []
+        for r in res:
+            data = {k: v for k, v in dict(r).items() if k not in ('requesting_id', 'connection_status')}
+            data['interests'] = [json.loads(i) for i in data.get('interests', [])]
+            if data.get('icebreakers') is not None:
+                data['icebreakers'] = json.loads(data['icebreakers'])
+            profiles.append(UserProfileResponse(
+                **data,
                 connection_status=resolve_connection_status(uid, r['requesting_id'], r['connection_status']),
-            )
-            for r in res
-        ]
+            ))
+        return profiles
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
     except Exception:

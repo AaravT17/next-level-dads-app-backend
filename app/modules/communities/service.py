@@ -10,6 +10,7 @@ from app.common.constants import (
     MESSAGES_PAGE_LIMIT,
     REPLIES_PAGE_LIMIT,
 )
+import json
 from app.modules.communities.models import (
     CommunityResponse,
     CommunityMemberResponse,
@@ -299,7 +300,14 @@ async def get_community_members(
             cursor_joined_at=cursor_joined_at,
         )
         res = await conn.fetch(query, *params)
-        return [CommunityMemberResponse(**dict(r)) for r in res]
+        results = []
+        for r in res:
+            data = dict(r)
+            data['interests'] = [json.loads(i) for i in data.get('interests', [])]
+            if data.get('icebreakers') is not None:
+                data['icebreakers'] = json.loads(data['icebreakers'])
+            results.append(CommunityMemberResponse(**data))
+        return results
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid request parameters.')
     except Exception:
