@@ -45,13 +45,12 @@ messages, because the socket closes on a rejected subprotocol.
 There is no migration runner in this repo. Migrations are applied by hand, in
 timestamp order, before deploying code that depends on them.
 
-```
-db/migrations/
-  20260628000000_moderation_center_support.sql              ← shared baseline
-  20260701000000_user_preferences_and_legal_acceptances.sql ← shared baseline
-  20260901000000_phase_2_platform.sql                       ← Finn's work
-  20260912000000_onboarding_overhaul.sql                    ← Aarav's work
-```
+| Timestamp | Migration | Owner | Safe to re-run? |
+|---|---|---|---|
+| `20260628` | `moderation_center_support` | Aarav | already applied both sides |
+| `20260701` | `user_preferences_and_legal_acceptances` | Aarav | already applied both sides |
+| `20260901` | **`phase_2_platform`** | Finn | **yes** — idempotent throughout |
+| `20260912` | **`onboarding_overhaul`** | Aarav | **no** — deletes production data |
 
 The two August files predate the fork and are already applied in both projects.
 The two September files are the ones that matter here — one per stream,
