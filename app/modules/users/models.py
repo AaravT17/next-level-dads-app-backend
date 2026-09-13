@@ -5,7 +5,7 @@ from app.common.constants import (
     MAX_CITY_LENGTH,
     MAX_BIO_LENGTH,
     MAX_ICEBREAKER_ANSWER_LENGTH,
-    AGE_RANGES,
+    CHILDREN_AGE_RANGES,
     GOALS,
     CONNECTION_STYLES,
     MATCH_PRIORITIES,
@@ -304,7 +304,7 @@ def _validate_interests(v: list[UUID]) -> list[UUID]:
 
 def _validate_children_age_ranges(v: list[str]) -> list[str]:
     v = list(set(v))  # deduplicate
-    if any(r not in AGE_RANGES for r in v):
+    if any(r not in CHILDREN_AGE_RANGES for r in v):
         raise ValueError('Invalid age range.')
     return v
 

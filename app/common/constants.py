@@ -34,6 +34,8 @@ MIN_ICEBREAKERS = 1
 MAX_ICEBREAKERS = 3
 MAX_ICEBREAKER_ANSWER_LENGTH = 250
 
+CHILDREN_AGE_RANGES = {'Expecting', 'Newborn', 'Toddler', 'Preschool', 'Elementary', 'Teen', 'Adult'}
+
 PROVINCES = {'AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'SK', 'YT'}
 
 GOALS = {'dad-friends', 'events', 'playdates', 'advice', 'communities', 'resources', 'experts'}
