@@ -15,6 +15,17 @@ CREATE TABLE public.users (
     about           TEXT NOT NULL,
     avatar_url      TEXT,
     is_admin        BOOLEAN NOT NULL DEFAULT FALSE,
+
+    -- Onboarding profile fields. All nullable: profiles created before the
+    -- onboarding overhaul have none of them, and the flow lets a dad skip any
+    -- step past the basics.
+    kid_count         INTEGER,
+    goals             TEXT[],
+    primary_goal      TEXT,
+    connection_styles TEXT[],
+    match_priorities  TEXT[],
+    icebreakers       JSONB,
+
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -25,8 +36,10 @@ CREATE TABLE public.users (
 CREATE TABLE public.interests (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name       TEXT NOT NULL,
+    slug       TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (name)
+    UNIQUE (name),
+    CONSTRAINT interests_slug_unique UNIQUE (slug)
 );
 
 
@@ -50,6 +63,10 @@ CREATE TABLE public.user_children (
 
 -- ── User Profiles (View) ──────────────────────────────────────────────────────
 
+-- Interests come back as jsonb objects carrying the slug, not bare names, so the
+-- client can key its own copy off a stable identifier. The correlated subqueries
+-- replace the earlier LEFT JOIN + GROUP BY, which produced a row of NULLs rather
+-- than an empty array for a dad with no interests or no children.
 CREATE VIEW public.user_profiles WITH (security_invoker = on) AS
 SELECT
     u.id,
@@ -60,14 +77,27 @@ SELECT
     u.province,
     u.about,
     u.avatar_url,
+    u.kid_count,
+    u.goals,
+    u.primary_goal,
+    u.connection_styles,
+    u.match_priorities,
+    u.icebreakers,
     u.created_at,
-    array_agg(DISTINCT i.name)     AS interests,
-    array_agg(DISTINCT uc.age_range) AS children
-FROM public.users u
-LEFT JOIN public.user_interests ui ON u.id = ui.user_id
-LEFT JOIN public.interests i       ON ui.interest_id = i.id
-LEFT JOIN public.user_children uc  ON u.id = uc.user_id
-GROUP BY u.id;
+    COALESCE(
+        (SELECT array_agg(jsonb_build_object('id', i.id, 'slug', i.slug))
+         FROM public.user_interests ui
+         JOIN public.interests i ON i.id = ui.interest_id
+         WHERE ui.user_id = u.id),
+        '{}'
+    ) AS interests,
+    COALESCE(
+        (SELECT array_agg(uc.age_range)
+         FROM public.user_children uc
+         WHERE uc.user_id = u.id),
+        '{}'
+    ) AS children_age_ranges
+FROM public.users u;
 
 
 -- ── Connections ───────────────────────────────────────────────────────────────

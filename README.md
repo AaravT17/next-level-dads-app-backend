@@ -147,16 +147,18 @@ main.py              FastAPI app, lifespan, middleware, router registration
 
 ## Database and Migrations
 
-Migrations live in `db/migrations`. The current branch adds migrations for:
+Migrations live in `db/migrations`. Beyond the two that predate phase 2, this branch carries one migration per work stream:
 
-- Connection request notes.
-- Community invite messages.
-- Community images and the `community-images` bucket.
-- Moderation audit fields.
+- `20260901000000_phase_2_platform.sql` — connection request notes, community invite messages, community images and the `community-images` bucket, and moderation audit fields. Idempotent: safe to re-run against a database already holding some of it.
+- `20260912000000_onboarding_overhaul.sql` — curated interests with slugs, the new profile fields, and the rebuilt `user_profiles` view. **Not** idempotent, and it deletes non-curated interests and Quebec accounts. Read `docs/PHASE_2_INTEGRATION.md` before applying it to a database with real users.
+
+The two are order-independent; either sequence reaches the same schema.
 
 There is no migration runner in this repo yet. Apply migrations manually in the target database before deploying code that depends on new columns.
 
-The moderation audit migration must be applied with the backend code that writes `actioned_by`, `actioned_at`, `created_by`, and `lifted_by`.
+The moderation audit fields must be applied with the backend code that writes `actioned_by`, `actioned_at`, `created_by`, and `lifted_by`.
+
+`db/schema.ddl` is the full current schema and reproduces the same result as applying both migrations. Use it to build a fresh database; use the migrations on one that already has data.
 
 ## Realtime and WebSockets
 
