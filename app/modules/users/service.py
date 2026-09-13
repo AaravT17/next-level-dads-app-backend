@@ -3,10 +3,15 @@ import asyncpg
 from fastapi import HTTPException, status
 from app.common.config.supabase import get_supabase_admin
 from app.common.config.constants import AGE_RANGES, IMAGE_MIME_TO_EXT, PROFILES_PAGE_LIMIT
-from app.modules.users.models import MeResponse, UserProfileResponse, UserStatsResponse
+from app.modules.users.models import (
+    MeResponse,
+    UserProfileResponse,
+    UserStatsResponse,
+    CreateProfileRequest,
+    UpdateProfileRequest,
+)
 from app.modules.connections.utils import resolve_connection_status
-from app.modules.interests.utils import normalize_interest
-from datetime import date, datetime
+from datetime import datetime
 from uuid import UUID
 from app.modules.users.utils import is_18_or_older
 
@@ -56,97 +61,80 @@ async def get_user_profile(conn: asyncpg.Connection, user_id: str, curr_user_id:
 async def create_profile(
     conn: asyncpg.Connection,
     user_id: str,
-    name: str,
-    date_of_birth: date,
-    city: str,
-    province: str,
-    about: str,
-    file_contents: bytes | None,
-    mime_type: str | None,
-    interests: list[str] | None,
-    children_age_ranges: list[str],
-    marketing_emails_opt_in: bool,
-    accepted_terms: bool,
-    accepted_privacy_policy: bool,
+    body: CreateProfileRequest,
 ) -> MeResponse:
-    if not accepted_terms or not accepted_privacy_policy:
+    if not body.accepted_terms or not body.accepted_privacy_policy:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail='You must accept the Terms of Service and Privacy Policy to create an account.',
         )
-    if not is_18_or_older(date_of_birth):
+    if not is_18_or_older(body.date_of_birth):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail='You must be 18 or older to create an account.',
         )
 
-    avatar_url: str | None = None
-    if file_contents and mime_type:
-        avatar_url = await _upload_avatar_to_storage(user_id, file_contents, mime_type)
-
     try:
+        uid = UUID(user_id)
+        icebreakers_json = json.dumps([{'prompt_slug': e.prompt_slug, 'answer': e.answer} for e in body.icebreakers])
+
         async with conn.transaction():
             await conn.execute(
                 """
-                INSERT INTO users (id, name, date_of_birth, city, province, about, avatar_url)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                INSERT INTO users (
+                    id, name, date_of_birth, city, province, about,
+                    kid_count, goals, primary_goal, connection_styles,
+                    match_priorities, icebreakers
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 """,
-                UUID(user_id),
-                name,
-                date_of_birth,
-                city,
-                province,
-                about,
-                avatar_url,
+                uid,
+                body.name,
+                body.date_of_birth,
+                body.city,
+                body.province,
+                body.about,
+                body.kid_count,
+                body.goals,
+                body.primary_goal,
+                body.connection_styles,
+                body.match_priorities,
+                icebreakers_json,
             )
-            if interests is not None:
-                normalized_interests = [normalize_interest(i) for i in interests]
-                res = await conn.fetch(
-                    """
-                    INSERT INTO interests (name)
-                    SELECT unnest($1::text[])
-                    ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-                    RETURNING id, name
-                    """,
-                    normalized_interests,
-                )
-                interest_ids = [r['id'] for r in res]
-                await conn.execute(
-                    """
-                    INSERT INTO user_interests (user_id, interest_id)
-                    SELECT $1, unnest($2::uuid[])
-                    """,
-                    UUID(user_id),
-                    interest_ids,
-                )
             await conn.execute(
                 """
-                INSERT INTO user_children (user_id, age_range)
-                SELECT $1, unnest($2::text[])
+                INSERT INTO user_interests (user_id, interest_id)
+                SELECT $1, unnest($2::uuid[])
                 """,
-                UUID(user_id),
-                children_age_ranges,
+                uid,
+                body.interests,
             )
+            if body.children_age_ranges:
+                await conn.execute(
+                    """
+                    INSERT INTO user_children (user_id, age_range)
+                    SELECT $1, unnest($2::text[])
+                    """,
+                    uid,
+                    body.children_age_ranges,
+                )
             await conn.execute(
                 """
                 INSERT INTO user_preferences (user_id, marketing_emails_opt_in)
                 VALUES ($1, $2)
                 """,
-                UUID(user_id),
-                marketing_emails_opt_in,
+                uid,
+                body.marketing_emails_opt_in,
             )
-            # TODO: Remove community guidelines from legal acceptances, only T&C and privacy policy are required
             await conn.execute(
                 """
                 INSERT INTO user_legal_acceptances (user_id, document_type)
-                VALUES ($1, 'terms'), ($1, 'privacy_policy'), ($1, 'community_guidelines')
+                VALUES ($1, 'terms'), ($1, 'privacy_policy')
                 """,
-                UUID(user_id),
+                uid,
             )
             return await get_me(conn, user_id)
     except asyncpg.exceptions.UniqueViolationError:
-        if avatar_url:
-            await _delete_avatar_from_storage(user_id)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail='User already exists.',
@@ -154,8 +142,6 @@ async def create_profile(
     except HTTPException:
         raise
     except Exception:
-        if avatar_url:
-            await _delete_avatar_from_storage(user_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Failed to create user. Please try again later.',
@@ -205,74 +191,87 @@ async def discover_profiles(
 async def update_profile(
     conn: asyncpg.Connection,
     user_id: str,
-    name: str,
-    date_of_birth,
-    city: str,
-    province: str,
-    about: str,
-    interests: list[str] | None,
-    children_age_ranges: list[str],
+    body: UpdateProfileRequest,
 ) -> MeResponse:
-    if not is_18_or_older(date_of_birth):
+    if 'date_of_birth' in body.model_fields_set and not is_18_or_older(body.date_of_birth):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail='You must be 18 or older.',
         )
+
+    # Fields that map directly to columns on the users table
+    _DIRECT_FIELDS = {
+        'name',
+        'date_of_birth',
+        'city',
+        'province',
+        'about',
+        'kid_count',
+        'goals',
+        'primary_goal',
+        'connection_styles',
+        'match_priorities',
+    }
+
     try:
+        uid = UUID(user_id)
         async with conn.transaction():
-            await conn.execute(
-                """
-                DELETE FROM user_interests WHERE user_id = $1
-                """,
-                UUID(user_id),
-            )
-            if interests is not None:
-                normalized_interests = [normalize_interest(i) for i in interests]
-                res = await conn.fetch(
-                    """
-                    INSERT INTO interests (name)
-                    SELECT unnest($1::text[])
-                    ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-                    RETURNING id, name
-                    """,
-                    normalized_interests,
+            set_clauses = []
+            params = []
+            i = 1
+            for field in _DIRECT_FIELDS:
+                if field in body.model_fields_set:
+                    set_clauses.append(f'{field} = ${i}')
+                    params.append(getattr(body, field))
+                    i += 1
+
+            # Handle icebreakers (JSONB serialization)
+            if 'icebreakers' in body.model_fields_set:
+                set_clauses.append(f'icebreakers = ${i}')
+                params.append(json.dumps(
+                    [{'prompt_slug': e.prompt_slug, 'answer': e.answer} for e in body.icebreakers]
+                ))
+                i += 1
+
+            if set_clauses:
+                set_clauses.append('updated_at = NOW()')
+                params.append(uid)
+                await conn.execute(
+                    f'UPDATE users SET {", ".join(set_clauses)} WHERE id = ${i}',
+                    *params,
                 )
-                interest_ids = [r['id'] for r in res]
+
+            # Handle interests (junction table)
+            if 'interests' in body.model_fields_set:
+                await conn.execute(
+                    'DELETE FROM user_interests WHERE user_id = $1',
+                    uid,
+                )
                 await conn.execute(
                     """
                     INSERT INTO user_interests (user_id, interest_id)
                     SELECT $1, unnest($2::uuid[])
                     """,
-                    UUID(user_id),
-                    interest_ids,
+                    uid,
+                    body.interests,
                 )
-            await conn.execute(
-                """
-                DELETE FROM user_children WHERE user_id = $1
-                """,
-                UUID(user_id),
-            )
-            await conn.execute(
-                """
-                INSERT INTO user_children (user_id, age_range)
-                SELECT $1, unnest($2::text[])
-                """,
-                UUID(user_id),
-                children_age_ranges,
-            )
-            await conn.execute(
-                """
-                UPDATE users
-                SET name = $1, date_of_birth = $2, city = $3, province = $4, about = $5, updated_at = NOW()
-                WHERE id = $6
-                """,
-                name,
-                date_of_birth,
-                city,
-                province,
-                about,
-                UUID(user_id),
-            )
+
+            # Handle children age ranges (junction table)
+            if 'children_age_ranges' in body.model_fields_set:
+                await conn.execute(
+                    'DELETE FROM user_children WHERE user_id = $1',
+                    uid,
+                )
+                if body.children_age_ranges:
+                    await conn.execute(
+                        """
+                        INSERT INTO user_children (user_id, age_range)
+                        SELECT $1, unnest($2::text[])
+                        """,
+                        uid,
+                        body.children_age_ranges,
+                    )
+
             return await get_me(conn, user_id)
     except HTTPException:
         raise
@@ -511,11 +510,11 @@ async def _upload_avatar_to_storage(user_id: str, file_contents: bytes, mime_typ
             file=file_contents,
             file_options={'content-type': mime_type, 'upsert': 'true'},
         )
-        # TODO: There is a small chance that the upload succeeds but the public URL retrieval fails. We should 
+        # TODO: There is a small chance that the upload succeeds but the public URL retrieval fails. We should
         # handle this case and delete the uploaded file if the public URL retrieval fails. However, in that case,
         # the issue is that we might delete the user's old file if they are updating their avatar, and this may
         # leave a dangling reference in the DB. We need to think about how to handle this properly. Best approach
-        # may be to use random UUIDs for the file path (or perhaps /user_id/avatar_uuid) so that we can delete the 
+        # may be to use random UUIDs for the file path (or perhaps /user_id/avatar_uuid) so that we can delete the
         # file if the public URL retrieval fails.
         return await supabase_admin.storage.from_('avatars').get_public_url(user_id)
     except Exception:

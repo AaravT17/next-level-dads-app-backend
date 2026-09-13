@@ -2,14 +2,12 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
-    Form,
     Query,
     UploadFile,
-    Body,
     status,
     Request,
 )
-from app.common.config.constants import IS_PRODUCTION, MAX_NAME_LENGTH, MAX_CITY_LENGTH, MAX_BIO_LENGTH
+from app.common.config.constants import IS_PRODUCTION
 from app.common.dependencies.rate_limiting import (
     CreateProfileLimiter,
     DiscoverProfilesLimiter,
@@ -17,13 +15,20 @@ from app.common.dependencies.rate_limiting import (
     UpdateProfileLimiter,
 )
 from app.common.dependencies.auth import get_current_user, get_consented_user
-from app.modules.users.models import MeResponse, UserProfileResponse, UserStatsResponse, UpdatePreferencesRequest
+from app.modules.users.models import (
+    MeResponse,
+    UserProfileResponse,
+    UserStatsResponse,
+    UpdatePreferencesRequest,
+    CreateProfileRequest,
+    UpdateProfileRequest,
+)
 from app.modules.communities.models import CommunityResponse
 from app.modules.events.models import EventResponse
 import app.modules.users.service as users_service
 from app.common.dependencies.db import get_db
 import asyncpg
-from datetime import datetime, date
+from datetime import datetime
 from uuid import UUID
 import app.modules.communities.service as communities_service
 import app.modules.events.service as events_service
@@ -56,43 +61,10 @@ async def get_user_profile(
 )
 async def create_profile(
     request: Request,
-    name: str = Form(..., max_length=MAX_NAME_LENGTH),
-    date_of_birth: date = Form(...),
-    city: str = Form(..., max_length=MAX_CITY_LENGTH),
-    province: str = Form(..., min_length=2, max_length=2),
-    about: str = Form(..., max_length=MAX_BIO_LENGTH),
-    avatar: UploadFile | None = File(None),
-    interests: list[str] | None = Form(None),
-    children_age_ranges: list[str] = Form(...),
-    accepted_terms: bool = Form(...),
-    accepted_privacy_policy: bool = Form(...),
-    marketing_emails_opt_in: bool = Form(False),
+    body: CreateProfileRequest,
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    user_id = request.state.user_id
-
-    file_contents: bytes | None = None
-    mime_type: str | None = None
-    if avatar:
-        file_contents = await avatar.read()
-        mime_type = avatar.content_type
-
-    return await users_service.create_profile(
-        conn,
-        user_id,
-        name,
-        date_of_birth,
-        city,
-        province,
-        about,
-        file_contents,
-        mime_type,
-        interests,
-        children_age_ranges,
-        marketing_emails_opt_in,
-        accepted_terms,
-        accepted_privacy_policy,
-    )
+    return await users_service.create_profile(conn, request.state.user_id, body)
 
 
 @router.get(
@@ -114,8 +86,15 @@ async def discover_profiles(
     conn: asyncpg.Connection = Depends(get_db),
 ):
     return await users_service.discover_profiles(
-        conn, request.state.user_id, interests, children_age_ranges,
-        provinces, age_ranges, name, cursor_id, cursor_created_at,
+        conn,
+        request.state.user_id,
+        interests,
+        children_age_ranges,
+        provinces,
+        age_ranges,
+        name,
+        cursor_id,
+        cursor_created_at,
     )
 
 
@@ -150,19 +129,10 @@ async def get_user_events(
 )
 async def update_profile(
     request: Request,
-    name: str = Body(..., max_length=MAX_NAME_LENGTH),
-    date_of_birth: date = Body(...),
-    city: str = Body(..., max_length=MAX_CITY_LENGTH),
-    province: str = Body(..., min_length=2, max_length=2),
-    about: str = Body(..., max_length=MAX_BIO_LENGTH),
-    interests: list[str] | None = Body(None),
-    children_age_ranges: list[str] = Body(...),
+    body: UpdateProfileRequest,
     conn: asyncpg.Connection = Depends(get_db),
 ):
-    return await users_service.update_profile(
-        conn, request.state.user_id, name, date_of_birth,
-        city, province, about, interests, children_age_ranges,
-    )
+    return await users_service.update_profile(conn, request.state.user_id, body)
 
 
 @router.put(
