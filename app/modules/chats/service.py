@@ -25,6 +25,7 @@ from app.modules.chats.models import (
     AddParticipantsRequest,
     ChatAddableParticipantResponse,
     SharedCommunityResponse,
+    ChatMembershipResponse,
 )
 
 
@@ -109,7 +110,7 @@ logger = logging.getLogger(__name__)
 # The event loop holds only a *weak* reference to a task, so a fire-and-forget
 # create_task() whose return value is discarded can be garbage-collected before
 # it finishes. That surfaces as a WebSocket event that silently never arrives --
-# rare, unreproducible, and invisible because _publish_event swallows errors.
+# rare, unreproducible, and invisible because _safe_publish swallows errors.
 # Keeping a strong reference until the task completes is the documented fix.
 _background_tasks: set[asyncio.Task] = set()
 
@@ -184,75 +185,80 @@ async def create_chat(
     user_id: UUID,
     body: CreateChatRequest,
 ) -> dict:
-    # TODO: There is a race condition between us validating that the user is connected with the participants and inserting the chat. If a connection is removed between these two steps, the chat will be created with a participant that the user is no longer connected with. This is an edge case, but we should fix it in the future by using a transaction with a read-lock (FOR SHARE) on the connections rows to prevent them from being deleted while we are creating the chat. This will prevent a DM chat from persisting after the connection is removed.
-    name, participant_ids = body.name, body.participant_ids
-
-    # validate participant IDs: must be connected with current user (implicitly checks existence and excludes self)
+    chat_id: UUID | None = None
+    # participant IDs are deduplicated by the validation layer, need not worry about that here
     try:
-        connections = await conn.fetch(
-            """
-            SELECT (CASE WHEN requesting_id = $1 THEN requested_id ELSE requesting_id END) AS user_id
-            FROM connections
-            WHERE (requesting_id = $1 OR requested_id = $1) AND status = 'accepted'
-            """,
-            user_id,
-        )
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to create chat. Please try again later.',
-        )
+        async with conn.transaction():
+            # Validate participant IDs: must be connected with current user (implicitly excludes self)
+            # Add a read-lock (FOR SHARE) on the connection rows to prevent them from being deleted while we are
+            # creating the chat. This will prevent a DM chat from persisting after the connection is removed.
+            connections = await conn.fetch(
+                """
+                SELECT (CASE WHEN requesting_id = $1 THEN requested_id ELSE requesting_id END) AS user_id
+                FROM connections
+                WHERE (requesting_id = $1 OR requested_id = $1) AND status = 'accepted'
+                FOR SHARE
+                """,
+                user_id,
+            )
+            connected_ids = {r['user_id'] for r in connections}
+            if any(pid not in connected_ids for pid in body.participant_ids):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail='You can only add users to a chat if you are connected with them.',
+                )
 
-    connected_ids = {r['user_id'] for r in connections}
-    if any(pid not in connected_ids for pid in participant_ids):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail='You can only add users with whom you are connected'
-        )
-
-    if len(participant_ids) == 1:
-        try:
-            async with conn.transaction():
+            if len(body.participant_ids) == 1:
                 chat_id = await conn.fetchval(
                     "INSERT INTO chats (type, dm_user_1, dm_user_2) VALUES ('dm', $1, $2) RETURNING id",
                     user_id,
-                    participant_ids[0],
-                )
+                    body.participant_ids[0],
+                )  # can raise a UniqueViolationError if a DM chat between the two users already exists
                 await conn.executemany(
                     'INSERT INTO chat_participants (chat_id, user_id) VALUES ($1, $2)',
-                    [(chat_id, user_id), (chat_id, participant_ids[0])],
+                    [(chat_id, user_id), (chat_id, body.participant_ids[0])],
                 )
-        except asyncpg.UniqueViolationError:
+            else:
+                chat_id = await conn.fetchval(
+                    "INSERT INTO chats (type, name, created_by) VALUES ('group', $1, $2) RETURNING id",
+                    body.name,
+                    user_id,
+                )
+                await conn.executemany(
+                    'INSERT INTO chat_participants (chat_id, user_id, is_admin) VALUES ($1, $2, $3)',
+                    [(chat_id, pid, False) for pid in body.participant_ids] + [(chat_id, user_id, True)],
+                )
+    except HTTPException:
+        raise
+    except asyncpg.UniqueViolationError:
+        # a DM chat between the two users already exists, return the existing chat ID
+        try:
             existing_chat_id = await conn.fetchval(
                 """
                 SELECT id FROM chats
                 WHERE (dm_user_1 = $1 AND dm_user_2 = $2) OR (dm_user_1 = $2 AND dm_user_2 = $1)
                 """,
                 user_id,
-                participant_ids[0],
+                body.participant_ids[0],
             )
             return {'id': str(existing_chat_id), 'created': False}
-        except Exception as _:
+        except Exception:
+            logger.exception('Failed to fetch existing chat ID after unique violation')
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail='Failed to create chat. Please try again later.',
             )
-    else:
-        try:
-            async with conn.transaction():
-                chat_id = await conn.fetchval(
-                    "INSERT INTO chats (type, name, created_by) VALUES ('group', $1, $2) RETURNING id",
-                    name,
-                    user_id,
-                )
-                await conn.executemany(
-                    'INSERT INTO chat_participants (chat_id, user_id, is_admin) VALUES ($1, $2, $3)',
-                    [(chat_id, pid, False) for pid in participant_ids] + [(chat_id, user_id, True)],
-                )
-        except Exception as _:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail='Failed to create chat. Please try again later.',
-            )
+    except Exception:
+        logger.exception('Failed to create chat')
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to create chat. Please try again later.',
+        )
+
+    # publish chats:added to each participant's user channel, frontend fetches the preview itself
+    all_participant_ids = [user_id] + body.participant_ids
+    event = {'type': 'chats:added', 'payload': {'chat_id': str(chat_id)}}
+    _spawn(asyncio.gather(*[_safe_publish(f'user:{uid}', event) for uid in all_participant_ids]))
 
     return {'id': str(chat_id), 'created': True}
 
@@ -377,10 +383,7 @@ async def send_message(
             """
             SELECT
                 EXISTS (SELECT 1 FROM chat_participants WHERE chat_id = $1 AND user_id = $2) AS is_participant,
-                ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM messages WHERE id = $3 AND chat_id = $1)) AS reply_to_valid,
-                array_agg(user_id) AS participant_ids
-            FROM chat_participants
-            WHERE chat_id = $1
+                ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM messages WHERE id = $3 AND chat_id = $1)) AS reply_to_valid
             """,
             chat_id,
             user_id,
@@ -471,33 +474,21 @@ async def send_message(
         created_at=row['created_at'],
     )
 
-    # TODO: Since we want to support multiple active connections per user, we need to publish to 
-    # the sender as well (for their other connections)
-
-    # publish to all participants except the sender, fire off as background task, don't delay response
+    # Published on the chat's own channel, which reaches the sender's other
+    # sockets too -- the per-user scheme had to exclude the sender and left them
+    # unsynced across devices.
     _spawn(
-        _publish_event(
-            publish_to=[pid for pid in validation['participant_ids'] if str(pid) != str(user_id)],
-            type='messages:new',
-            payload=msg.model_dump(mode='json'),
-        )
+        _safe_publish(f'chat:{chat_id}', {'type': 'messages:new', 'payload': msg.model_dump(mode='json')})
     )
 
     return msg
 
 
-async def _publish_event(
-    publish_to: list[UUID],
-    type: str,
-    payload: dict,
-) -> None:
-    async def _safe_publish(uid):
-        try:
-            await publish(str(uid), {'user_id': str(uid), 'event_data': {'type': type, 'payload': payload}})
-        except Exception:
-            logger.exception('Failed to publish %s event to user %s', type, uid)
-
-    await asyncio.gather(*[_safe_publish(uid) for uid in publish_to])
+async def _safe_publish(channel: str, event: dict) -> None:
+    try:
+        await publish(channel, event)
+    except Exception:
+        logger.exception('Failed to publish %s event to channel %s', event.get('type'), channel)
 
 
 async def edit_message(
@@ -510,21 +501,10 @@ async def edit_message(
     try:
         result = await conn.fetchrow(
             """
-            WITH updated AS (
-                UPDATE messages
-                SET content = $4, edited_at = NOW()
-                WHERE id = $1 AND chat_id = $2 AND sender_id = $3 AND is_deleted = FALSE
-                RETURNING id, content, edited_at, chat_id
-            )
-            SELECT
-                updated.id,
-                updated.chat_id,
-                updated.content,
-                updated.edited_at,
-                array_agg(cp.user_id) AS participant_ids
-            FROM updated
-            JOIN chat_participants cp ON cp.chat_id = updated.chat_id
-            GROUP BY updated.id, updated.chat_id, updated.content, updated.edited_at
+            UPDATE messages
+            SET content = $4, edited_at = NOW()
+            WHERE id = $1 AND chat_id = $2 AND sender_id = $3 AND is_deleted = FALSE
+            RETURNING id, chat_id, content, edited_at
             """,
             message_id,
             chat_id,
@@ -542,15 +522,17 @@ async def edit_message(
         )
 
     _spawn(
-        _publish_event(
-            publish_to=[pid for pid in result['participant_ids'] if str(pid) != str(user_id)],
-            type='messages:edit',
-            payload={
-                'id': str(result['id']),
-                'chat_id': str(result['chat_id']),
-                'content': result['content'],
-                'edited_at': result['edited_at'].isoformat(),
-                'is_deleted': False,
+        _safe_publish(
+            f'chat:{chat_id}',
+            {
+                'type': 'messages:edit',
+                'payload': {
+                    'id': str(result['id']),
+                    'chat_id': str(result['chat_id']),
+                    'content': result['content'],
+                    'edited_at': result['edited_at'].isoformat(),
+                    'is_deleted': False,
+                },
             },
         )
     )
@@ -567,19 +549,10 @@ async def delete_message(
     try:
         result = await conn.fetchrow(
             """
-            WITH updated AS (
-                UPDATE messages
-                SET is_deleted = TRUE
-                WHERE id = $1 AND chat_id = $2 AND sender_id = $3
-                RETURNING id, chat_id
-            )
-            SELECT
-                updated.id,
-                updated.chat_id,
-                array_agg(cp.user_id) AS participant_ids
-            FROM updated
-            JOIN chat_participants cp ON cp.chat_id = updated.chat_id
-            GROUP BY updated.id, updated.chat_id
+            UPDATE messages
+            SET is_deleted = TRUE
+            WHERE id = $1 AND chat_id = $2 AND sender_id = $3
+            RETURNING id, chat_id
             """,
             message_id,
             chat_id,
@@ -596,15 +569,17 @@ async def delete_message(
         )
 
     _spawn(
-        _publish_event(
-            publish_to=[pid for pid in result['participant_ids'] if str(pid) != str(user_id)],
-            type='messages:delete',
-            payload={
-                'id': str(result['id']),
-                'chat_id': str(result['chat_id']),
-                'content': '',
-                'is_deleted': True,
-                'edited_at': None,
+        _safe_publish(
+            f'chat:{chat_id}',
+            {
+                'type': 'messages:delete',
+                'payload': {
+                    'id': str(result['id']),
+                    'chat_id': str(result['chat_id']),
+                    'content': '',
+                    'is_deleted': True,
+                    'edited_at': None,
+                },
             },
         )
     )
@@ -677,7 +652,6 @@ async def add_participants(
     chat_id: UUID,
     body: AddParticipantsRequest,
 ) -> list[ChatParticipantResponse]:
-    new_participant_ids = body.new_participant_ids
     try:
         # verify that:
         #   - the chat exists and the current user is a participant
@@ -710,13 +684,15 @@ async def add_participants(
 
         if validation['connections'] is None:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail='You can only add users with whom you are connected'
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail='You can only add users to a chat if you are connected with them.',
             )
 
         connected_ids = set(validation['connections'])
-        if any(pid not in connected_ids for pid in new_participant_ids):
+        if any(pid not in connected_ids for pid in body.new_participant_ids):
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail='You can only add users with whom you are connected'
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail='You can only add users to a chat if you are connected with them.',
             )
 
         # add new participants and return their info in one round trip
@@ -738,7 +714,7 @@ async def add_participants(
             ORDER BY i.joined_at DESC, i.user_id DESC
             """,
             chat_id,
-            new_participant_ids,
+            body.new_participant_ids,
         )
     except HTTPException:
         raise
@@ -747,6 +723,12 @@ async def add_participants(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Failed to add participant. Please try again later.',
         )
+
+    # publish chats:added to each newly added participant's user channel, frontend fetches the preview itself
+    added_user_ids = [r['id'] for r in res]
+    if added_user_ids:
+        event = {'type': 'chats:added', 'payload': {'chat_id': str(chat_id)}}
+        _spawn(asyncio.gather(*[_safe_publish(f'user:{uid}', event) for uid in added_user_ids]))
 
     return [ChatParticipantResponse(**dict(r)) for r in res]
 
@@ -761,7 +743,7 @@ async def remove_participant(
     if str(user_id) == str(participant_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail='You cannot remove yourself from the chat. Please leave the chat instead.',
+            detail='You cannot remove yourself from the chat.',
         )
 
     try:
@@ -781,17 +763,16 @@ async def remove_participant(
             participant_id,
         )
         if not validation:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Chat not found')
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Chat not found.')
         if not validation['is_admin'] or validation['is_owner']:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail='You cannot remove this participant from the chat'
+                status_code=status.HTTP_403_FORBIDDEN, detail='You cannot remove this participant from the chat.'
             )
         await conn.execute(
             'DELETE FROM chat_participants WHERE chat_id = $1 AND user_id = $2',
             chat_id,
             participant_id,
         )
-        return
     except HTTPException:
         raise
     except Exception as _:
@@ -799,6 +780,11 @@ async def remove_participant(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Failed to remove participant. Please try again later.',
         )
+
+    _spawn(
+        _safe_publish(f'user:{participant_id}', {'type': 'chats:removed', 'payload': {'chat_id': str(chat_id)}})
+    )
+    return
 
 
 async def leave_chat(
@@ -831,12 +817,16 @@ async def leave_chat(
             chat_id,
             user_id,
         )
-        return
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Failed to leave chat. Please try again later.',
         )
+
+    _spawn(
+        _safe_publish(f'user:{user_id}', {'type': 'chats:removed', 'payload': {'chat_id': str(chat_id)}})
+    )
+    return
 
 
 async def promote_participant(
@@ -1070,8 +1060,8 @@ async def _get_or_create_dm(
     conn: asyncpg.Connection,
     user_id: UUID,
     other_user_id: UUID,
-) -> UUID:
-    """The DM between two users, created on first use.
+) -> tuple[UUID, bool]:
+    """The DM between two users, created on first use, and whether this call created it.
 
     Runs inside a savepoint so the losing side of a concurrent create can fall
     back to the existing row without aborting the caller's transaction.
@@ -1087,7 +1077,7 @@ async def _get_or_create_dm(
         other_user_id,
     )
     if chat_id is not None:
-        return chat_id
+        return chat_id, False
 
     try:
         async with conn.transaction():
@@ -1100,9 +1090,9 @@ async def _get_or_create_dm(
                 'INSERT INTO chat_participants (chat_id, user_id) VALUES ($1, $2)',
                 [(chat_id, user_id), (chat_id, other_user_id)],
             )
-        return chat_id
+        return chat_id, True
     except asyncpg.UniqueViolationError:
-        return await conn.fetchval(
+        existing_chat_id = await conn.fetchval(
             """
             SELECT id FROM chats
             WHERE type = 'dm'
@@ -1112,6 +1102,7 @@ async def _get_or_create_dm(
             user_id,
             other_user_id,
         )
+        return existing_chat_id, False
 
 
 async def send_community_invites(
@@ -1137,11 +1128,11 @@ async def send_community_invites(
             detail='Failed to send invites. Please try again later.',
         )
 
-    sent: list[tuple[UUID, UUID, UUID, datetime]] = []
+    sent: list[tuple[UUID, UUID, UUID, datetime, bool]] = []
     try:
         async with conn.transaction():
             for recipient_id in recipient_ids:
-                chat_id = await _get_or_create_dm(conn, sender_id, recipient_id)
+                chat_id, chat_created = await _get_or_create_dm(conn, sender_id, recipient_id)
                 row = await conn.fetchrow(
                     """
                     INSERT INTO messages (chat_id, sender_id, content, shared_community_id)
@@ -1153,7 +1144,7 @@ async def send_community_invites(
                     content,
                     community.id,
                 )
-                sent.append((recipient_id, chat_id, row['id'], row['created_at']))
+                sent.append((recipient_id, chat_id, row['id'], row['created_at'], chat_created))
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1162,7 +1153,7 @@ async def send_community_invites(
 
     # Published only after the transaction commits, so a recipient that reacts by
     # fetching the chat cannot beat the rows it is fetching.
-    for recipient_id, chat_id, message_id, created_at in sent:
+    for recipient_id, chat_id, message_id, created_at, chat_created in sent:
         msg = MessageResponse(
             id=message_id,
             chat_id=chat_id,
@@ -1174,12 +1165,62 @@ async def send_community_invites(
             is_deleted=False,
             created_at=created_at,
         )
+        # A DM that did not exist a moment ago has no subscriber on its channel
+        # yet, so the recipient is told to pick it up first. Order matters: the
+        # message event that follows would otherwise land on a channel nobody
+        # is listening to.
+        if chat_created:
+            _spawn(
+                _safe_publish(
+                    f'user:{recipient_id}',
+                    {'type': 'chats:added', 'payload': {'chat_id': str(chat_id)}},
+                )
+            )
+            _spawn(
+                _safe_publish(
+                    f'user:{sender_id}',
+                    {'type': 'chats:added', 'payload': {'chat_id': str(chat_id)}},
+                )
+            )
+
         _spawn(
-            _publish_event(
-                publish_to=[recipient_id],
-                type='messages:new',
-                payload=msg.model_dump(mode='json'),
+            _safe_publish(
+                f'chat:{chat_id}',
+                {'type': 'messages:new', 'payload': msg.model_dump(mode='json')},
             )
         )
 
-    return [chat_id for _, chat_id, _, _ in sent]
+    return [chat_id for _, chat_id, _, _, _ in sent]
+
+
+async def get_user_chat_memberships(conn: asyncpg.Connection, user_id: str) -> list[ChatMembershipResponse]:
+    """Return chat_id, last_read_at, updated_at for all chats the user is a participant in."""
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT c.id AS chat_id, cp.last_read_at, c.updated_at
+            FROM chat_participants cp
+            JOIN chats c ON c.id = cp.chat_id
+            WHERE cp.user_id = $1
+            """,
+            user_id,
+        )
+        return [ChatMembershipResponse(**dict(r)) for r in rows]
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch chat memberships. Please try again later.',
+        )
+
+
+async def get_user_chat_ids(conn: asyncpg.Connection, user_id: str) -> set[str]:
+    """Return the IDs of all chats that the user is a participant in."""
+    rows = await conn.fetch(
+        """
+        SELECT chat_id
+        FROM chat_participants
+        WHERE user_id = $1
+        """,
+        user_id,
+    )
+    return {str(r['chat_id']) for r in rows}

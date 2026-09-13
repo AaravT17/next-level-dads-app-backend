@@ -112,7 +112,7 @@ async def logout(access_token: str, response: Response):
 
     if user_id:
         try:
-            await publish(user_id, {'user_id': user_id, 'event_data': {'type': SESSION_REVOKED_EVENT}})
+            await publish(f'user:{user_id}', {'type': SESSION_REVOKED_EVENT})
         except Exception:
             # The cookie is still cleared and the token still revoked; only the
             # live socket survives, and it dies at token expiry regardless.

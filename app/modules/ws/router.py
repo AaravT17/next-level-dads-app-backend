@@ -12,7 +12,13 @@ import app.modules.chats.service as chats_service
 from app.common.config.constants import IS_PRODUCTION
 from app.common.config.redis import publish
 from app.common.dependencies.auth import check_consent
-from app.common.ws.connection_manager import connect, disconnect
+from app.common.ws.connection_manager import (
+    register_connection,
+    unregister_connection,
+    initialize_user_chats,
+    is_user_initialized,
+    send_event,
+)
 from app.modules.ws.auth import BEARER_SUBPROTOCOL, extract_bearer_token, token_expiry
 
 logger = logging.getLogger(__name__)
@@ -112,9 +118,19 @@ async def chat_websocket(ws: WebSocket):
     limiter = _message_limiter(user_id)
 
     try:
-        await connect(user_id, connection_id, ws, subprotocol=BEARER_SUBPROTOCOL)
+        await register_connection(user_id, connection_id, ws, subprotocol=BEARER_SUBPROTOCOL)
         if expires_at is not None:
             expiry_task = asyncio.create_task(_close_at(ws, expires_at))
+
+        if not is_user_initialized(user_id):
+            async with ws.app.state.pool.acquire() as conn:
+                chat_ids = await chats_service.get_user_chat_ids(conn, user_id)
+            await initialize_user_chats(user_id, chat_ids)
+
+        # Tell the client the socket is live and its chat subscriptions are in
+        # place. Queries gated on this cannot race the subscription setup and
+        # miss events published in between.
+        await send_event(ws, {'type': 'ws:ready'})
 
         while True:
             text = await ws.receive_text()
@@ -138,15 +154,12 @@ async def chat_websocket(ws: WebSocket):
                         last_read_at = await chats_service.mark_chat_read(conn, user_id, chat_id)
                     if last_read_at:
                         await publish(
-                            user_id,
+                            f'user:{user_id}',
                             {
-                                'user_id': user_id,
-                                'event_data': {
-                                    'type': 'chats:read',
-                                    'payload': {
-                                        'chat_id': chat_id,
-                                        'last_read_at': last_read_at.isoformat(),
-                                    },
+                                'type': 'chats:read',
+                                'payload': {
+                                    'chat_id': chat_id,
+                                    'last_read_at': last_read_at.isoformat(),
                                 },
                             },
                         )
@@ -169,4 +182,4 @@ async def chat_websocket(ws: WebSocket):
         if expiry_task is not None:
             expiry_task.cancel()
         # Passing the socket makes this a no-op if the map has already moved on.
-        await disconnect(user_id, connection_id, ws)
+        await unregister_connection(user_id, connection_id, ws)
