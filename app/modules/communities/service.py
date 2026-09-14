@@ -130,6 +130,22 @@ _CONVERSATION_VISIBLE_SQL = """
     )
 """
 
+# A conversation carrying a report nobody has decided yet is withheld from the
+# cross-community feed. Inside a community it renders as the "potentially
+# harmful content" placeholder, which is a fair trade there: the reader chose
+# that community and can step past one hidden card. The feed offers no such
+# choice -- the card arrives unasked-for and its entire content is the warning,
+# so it spends a slot saying nothing. It returns to the feed if a moderator
+# dismisses the report, and _CONVERSATION_VISIBLE_SQL takes over if they action it.
+_CONVERSATION_UNREPORTED_SQL = """
+    NOT EXISTS (
+        SELECT 1 FROM moderation_reports mr
+        WHERE mr.content_type = 'conversation'
+          AND mr.content_id = c.id
+          AND mr.status = 'pending'
+    )
+"""
+
 _TIME_WINDOW_SQL: dict[str, str] = {
     'today': "AND c.last_activity_at >= NOW() - INTERVAL '1 day'",
     'week': "AND c.last_activity_at >= NOW() - INTERVAL '7 days'",
@@ -595,17 +611,17 @@ async def list_conversations(
     return await conn.fetch(query, *params)
 
 
-async def list_feed_conversations(
-    conn: asyncpg.Connection,
+def _build_feed_conversations_query(
     user_id: UUID,
     following: bool = False,
     cursor_id: UUID | None = None,
     cursor_created_at: datetime | None = None,
-) -> list[asyncpg.Record]:
-    """Newest-first conversations across every community, with the source community name.
+) -> tuple[str, list]:
+    """The feed query and its bind parameters, built without touching the database.
 
-    Deleted rows are excluded: the per-community list keeps them as tombstones for
-    thread history, but in a cross-community feed they carry no context.
+    Split out from list_feed_conversations so the feed's exclusions can be
+    asserted in a unit test -- the moderation ones in particular are invisible
+    from the response, since the whole point is that nothing comes back.
     """
     params: list = [user_id]
     i = 2
@@ -637,11 +653,35 @@ async def list_feed_conversations(
         {membership_join}
         WHERE NOT c.is_deleted
         AND {_CONVERSATION_VISIBLE_SQL}
+        AND {_CONVERSATION_UNREPORTED_SQL}
         {cursor_condition}
         ORDER BY c.created_at DESC, c.id DESC
         LIMIT ${i}
     """
     params.append(CONVERSATIONS_PAGE_LIMIT)
+    return query, params
+
+
+async def list_feed_conversations(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    following: bool = False,
+    cursor_id: UUID | None = None,
+    cursor_created_at: datetime | None = None,
+) -> list[asyncpg.Record]:
+    """Newest-first conversations across every community, with the source community name.
+
+    Deleted rows are excluded: the per-community list keeps them as tombstones for
+    thread history, but in a cross-community feed they carry no context. Threads
+    with an undecided report are excluded for a related reason -- see
+    _CONVERSATION_UNREPORTED_SQL.
+    """
+    query, params = _build_feed_conversations_query(
+        user_id,
+        following=following,
+        cursor_id=cursor_id,
+        cursor_created_at=cursor_created_at,
+    )
     return await conn.fetch(query, *params)
 
 

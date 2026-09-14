@@ -493,7 +493,13 @@ def _build_discover_profiles_query(
         params.extend([cursor_created_at, cursor_id])
         i += 2
 
-    where_clause = "(c.id IS NULL OR (c.requesting_id = $1 AND c.status = 'pending')) AND "
+    # Browse is for dads you have not acted on yet, so the LEFT JOIN finding no
+    # connection row at all is the whole admission rule. A request you have
+    # already sent used to keep its card here in a waiting state; it no longer
+    # does, because there is nothing left to do with that card from the grid and
+    # it crowds out dads you could still act on. Every other state -- connected,
+    # blocked, or a request he sent you -- was already excluded by the same rule.
+    where_clause = 'c.id IS NULL AND '
 
     where_clause += ' AND '.join(conditions)
     query = f"""
