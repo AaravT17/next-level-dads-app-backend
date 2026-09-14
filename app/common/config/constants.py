@@ -116,6 +116,16 @@ COMMUNITY_DESCRIPTION_MAX_LENGTH = 500
 CONVERSATION_TITLE_MIN_LENGTH = 3
 CONVERSATION_TITLE_MAX_LENGTH = 120
 CONVERSATION_BODY_MAX_LENGTH = 3000
+
+# What a post is for, shown as a chip on the card. Optional -- most posts do not
+# need one -- but a fixed vocabulary rather than the free text this used to be:
+# the label only helps a reader scanning a list if the same intent always
+# carries the same word, and twelve spellings of "question" help nobody.
+#
+# Stored values, not display text; the client owns the capitalisation. Rows
+# written before this was closed may hold anything, and are still returned as
+# they were -- only new posts are checked against this set.
+CONVERSATION_PROMPT_TYPES = {'question', 'advice', 'story', 'win', 'vent'}
 COMMUNITIES_PAGE_LIMIT = 20
 CONVERSATIONS_PAGE_LIMIT = 10
 # The Home "get back into it" rail is a fixed shelf, not a browse surface.

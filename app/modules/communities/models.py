@@ -8,6 +8,7 @@ from app.common.config.constants import (
     CONVERSATION_TITLE_MIN_LENGTH,
     CONVERSATION_TITLE_MAX_LENGTH,
     CONVERSATION_BODY_MAX_LENGTH,
+    CONVERSATION_PROMPT_TYPES,
 )
 from typing import Literal
 from app.modules.users.models import UserBase
@@ -48,6 +49,28 @@ class ConversationCreate(BaseModel):
     )
     body: str = Field(min_length=1, max_length=CONVERSATION_BODY_MAX_LENGTH)
     prompt_type: str | None = None
+
+    @field_validator('prompt_type')
+    @classmethod
+    def validate_prompt_type(cls, v: str | None) -> str | None:
+        """One of a fixed set, or nothing at all.
+
+        The client offers these as a picker, so anything else arrived by hand.
+        Closing the field is what makes the chip worth reading: a reader
+        scanning a community should be able to trust that every post marked
+        "question" means the same thing.
+
+        An empty string is not a sixth kind -- a picker left on its default
+        sends one, and it should mean the same as omitting the field.
+        """
+        if v is None:
+            return None
+        v = v.strip().lower()
+        if not v:
+            return None
+        if v not in CONVERSATION_PROMPT_TYPES:
+            raise ValueError('Invalid conversation type.')
+        return v
 
 
 class ConversationResponse(BaseModel):
