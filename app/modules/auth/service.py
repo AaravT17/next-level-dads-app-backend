@@ -110,6 +110,12 @@ async def logout(access_token: str, response: Response):
         # not actually being revoked.
         logger.exception('Supabase sign-out failed; refresh token may still be valid')
 
+    # TODO: This publishes session:revoked on user:{user_id}, which closes ALL sockets for the user across all
+    # devices. But logout is scoped 'local' (only this session's refresh token is revoked), so we don't want to close
+    # other devices' sockets. They reconnect fine since their refresh tokens are still valid, but they have to do an
+    # unnecessary disconnect/reconnect. Either remove this publish entirely (the frontend already closes its own
+    # socket on logout, and the watchdog covers token expiry), or scope it per-token by tracking which access token
+    # opened each WebSocket and only closing sockets that match.
     if user_id:
         try:
             await publish(f'user:{user_id}', {'type': SESSION_REVOKED_EVENT})

@@ -28,12 +28,15 @@ router = APIRouter(
     tags=['ws'],
 )
 
-# The socket carries no per-message auth, so an unbounded loop is an unbounded
-# invitation: every `chats:read` takes a connection from a pool of ten that the
-# whole HTTP surface shares. Sixty a minute is far above what marking threads
-# read requires and far below what would starve the pool.
-_MESSAGE_LIMIT_TIMES = 60
-_MESSAGE_LIMIT_SECONDS = 60
+# The only inbound message type is chats:read, which fires on every incoming message while a chat is open (no
+# throttling on the frontend). The limit is set to 3/5s rather than the original 60/min — worst-case sync lag is
+# ~5 seconds instead of ~55 seconds. Consider replacing the per-message chats:read with a frontend interval
+# (send chats:read every 5s while a chat is open + once on chat close) to reduce redundant sends. Once we have more
+# message types being sent over the socket, consider a more sophisticated approach (e.g. per-message-type limits).
+_MESSAGE_LIMIT_TIMES = 3
+_MESSAGE_LIMIT_SECONDS = 5
+
+WS_READY_EVENT = 'ws:ready'
 
 
 async def _over_budget(ws: WebSocket, pexpire: int) -> bool:
@@ -69,6 +72,14 @@ def _message_limiter(user_id: str) -> WebSocketRateLimiter | None:
         identifier=identifier,
         callback=_over_budget,
     )
+
+
+async def _send_ready_event(ws: WebSocket) -> None:
+    """
+    Signal that the socket is live and chat subscriptions are in place.
+    Signals to the client that it is now safe to query chat state.
+    """
+    await send_event(ws, {'type': WS_READY_EVENT})
 
 
 async def _close_at(ws: WebSocket, expires_at: datetime) -> None:
@@ -127,10 +138,7 @@ async def chat_websocket(ws: WebSocket):
                 chat_ids = await chats_service.get_user_chat_ids(conn, user_id)
             await initialize_user_chats(user_id, chat_ids)
 
-        # Tell the client the socket is live and its chat subscriptions are in
-        # place. Queries gated on this cannot race the subscription setup and
-        # miss events published in between.
-        await send_event(ws, {'type': 'ws:ready'})
+        await _send_ready_event(ws)
 
         while True:
             text = await ws.receive_text()
