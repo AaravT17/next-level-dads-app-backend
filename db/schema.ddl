@@ -463,3 +463,45 @@ CREATE TABLE user_reports (
 CREATE UNIQUE INDEX idx_user_reports_unique_pair ON user_reports (reported_id, reporter_id);
 CREATE INDEX idx_user_reports_status_created ON user_reports (status, created_at DESC);
 CREATE INDEX idx_user_reports_reported_created ON user_reports (reported_id, created_at DESC);
+
+
+-- ── User Preferences ─────────────────────────────────────────────────────────
+
+CREATE TABLE user_preferences (
+    user_id                 UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    marketing_emails_opt_in BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
+-- ── User Legal Acceptances ───────────────────────────────────────────────────
+
+CREATE TABLE user_legal_acceptances (
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    document_type TEXT NOT NULL CHECK (document_type IN ('terms', 'privacy_policy', 'community_guidelines')),
+    accepted_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, document_type)
+);
+
+
+-- ── Notifications ────────────────────────────────────────────────────────────
+
+CREATE TABLE notifications (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    type            TEXT NOT NULL CHECK (type IN ('connection_request', 'connection_accepted', 'chat_added')),
+    payload         JSONB NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_notifications_user_created ON notifications (user_id, created_at DESC);
+
+
+-- ── User Notification State ──────────────────────────────────────────────────
+
+CREATE TABLE user_notification_state (
+    user_id         UUID PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
+    last_read_at    TIMESTAMPTZ,
+    last_cleared_at TIMESTAMPTZ
+);
