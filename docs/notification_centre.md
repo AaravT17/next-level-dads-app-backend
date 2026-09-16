@@ -148,10 +148,10 @@ Lightweight endpoint returning just the unread count. Used during app hydration 
 
 ### Updated outbound event payloads
 
-| Event          | Added fields                                                             |
-| -------------- | ------------------------------------------------------------------------ |
-| `messages:new` | `chat_name`, `chat_type`, `chat_avatar_url`                              |
-| `chats:added`  | `added_by`, `added_by_name`, `chat_name`, `chat_type`, `chat_avatar_url` |
+| Event          | Added fields                                                                                                  |
+| -------------- | ------------------------------------------------------------------------------------------------------------- |
+| `messages:new` | `chat_name`, `chat_type`, `chat_avatar_url`                                                                   |
+| `chats:added`  | `added_by`, `added_by_name`, `chat_name`, `chat_type`, `chat_avatar_url`, `notification_id?`, `notification_created_at?` |
 
 `chat_avatar_url`: null for now (no group avatars yet). Banner avatar logic: frontend checks `chat_type` — DM uses `sender_avatar_url` (already in `MessageResponse`), group uses `chat_avatar_url` with a default fallback. When group avatars are introduced, `chat_avatar_url` will populate for groups with no payload changes needed.
 
@@ -209,14 +209,9 @@ Each type gets its own `WebSocketRateLimiter` instance with a per-user Redis key
 
 ## Frontend: Event Buffering
 
-Expand the existing event buffer to cover notification events during app hydration:
+The existing event buffer already covers `chats:added` and `chats:removed` during membership fetch. No expansion needed for notification events (`connections:request`, `connections:accepted`) — these don't depend on the membership hashmap, the notification list cache isn't initialized at boot (it's fetched lazily on panel open), and the badge count self-corrects from the server count query. Buffering them would only delay query invalidations.
 
-1. WebSocket connects → `ws:ready`
-2. Fetch chat memberships AND notification count in parallel
-3. Buffer ALL incoming events (chat events + `connections:request`, `connections:accepted`, `chats:added`) during both fetches
-4. Drain buffer once **both** resolve — each event processed through the same handler as live events
-
-Scope of the existing buffer widens; the drain condition changes from "memberships resolved" to "memberships AND notifications resolved."
+`chats:added` is processed by both providers: ChatProvider handles hashmap insertion + preview fetch, NotificationProvider handles notification centre entry + badge (with guards). Both live and buffered `chats:added` events are forwarded to the notification handler.
 
 ---
 

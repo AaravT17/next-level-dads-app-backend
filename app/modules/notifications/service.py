@@ -99,27 +99,27 @@ async def create_notification(
 async def create_notifications_bulk(
     conn: asyncpg.Connection,
     notifications: list[tuple[UUID, NotificationType, dict]],
-) -> list[NotificationResponse] | None:
+) -> dict[UUID, NotificationResponse] | None:
     try:
         rows = await conn.fetch(
             """
             INSERT INTO notifications (user_id, type, payload)
             SELECT * FROM unnest($1::uuid[], $2::text[], $3::jsonb[])
-            RETURNING id, type, payload, created_at
+            RETURNING user_id, id, type, payload, created_at
             """,
             [n[0] for n in notifications],
             [n[1] for n in notifications],
             [json.dumps(n[2]) for n in notifications],
         )
-        return [
-            NotificationResponse(
+        return {
+            r['user_id']: NotificationResponse(
                 id=r['id'],
                 type=r['type'],
                 payload=json.loads(r['payload']),
                 created_at=r['created_at'],
             )
             for r in rows
-        ]
+        }
     except Exception:
         logger.exception('Failed to create notifications for users %s', [str(n[0]) for n in notifications])
         return None

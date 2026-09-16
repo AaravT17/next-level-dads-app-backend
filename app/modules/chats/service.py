@@ -492,13 +492,23 @@ async def _notify_chat_added(
     is_group: bool,
 ) -> None:
     """Create chat_added notification rows (for group chats only) and publish the WS event. Best-effort."""
+    notif_map: dict[UUID, notifications_service.NotificationResponse] = {}
     if is_group:
         notifications = [(uid, 'chat_added', payload) for uid in participant_ids if uid != added_by]
         async with pool.acquire() as conn:
-            await notifications_service.create_notifications_bulk(conn, notifications)
-    await asyncio.gather(
-        *[safe_publish(f'user:{uid}', {'type': 'chats:added', 'payload': payload}) for uid in participant_ids]
-    )
+            result = await notifications_service.create_notifications_bulk(conn, notifications)
+        if result:
+            notif_map = result
+
+    publishes = []
+    for uid in participant_ids:
+        ws_payload = {**payload}
+        notif = notif_map.get(uid)
+        if notif:
+            ws_payload['notification_id'] = str(notif.id)
+            ws_payload['notification_created_at'] = notif.created_at.isoformat()
+        publishes.append(safe_publish(f'user:{uid}', {'type': 'chats:added', 'payload': ws_payload}))
+    await asyncio.gather(*publishes)
 
 
 async def _publish_community_invite(
