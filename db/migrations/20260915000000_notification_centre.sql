@@ -7,7 +7,7 @@ BEGIN;
 CREATE TABLE IF NOT EXISTS notifications (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id         UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-    type            TEXT NOT NULL CHECK (type IN ('connection_request', 'connection_accepted', 'chat_added')),
+    type            TEXT NOT NULL,
     payload         JSONB NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()

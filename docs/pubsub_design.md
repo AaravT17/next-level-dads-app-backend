@@ -123,14 +123,10 @@ msg_payload = msg.model_dump(mode='json')
 msg_payload['chat_name'] = extra['chat_name']
 msg_payload['chat_type'] = extra['chat_type']
 msg_payload['chat_avatar_url'] = None
-asyncio.create_task(
-    _safe_publish(f'chat:{chat_id}', {'type': 'messages:new', 'payload': msg_payload})
-)
+spawn(safe_publish(f'chat:{chat_id}', {'type': 'messages:new', 'payload': msg_payload}))
 
 # edit_message / delete_message — same pattern
-asyncio.create_task(
-    _safe_publish(f'chat:{chat_id}', {'type': 'messages:edit', 'payload': {...}})
-)
+spawn(safe_publish(f'chat:{chat_id}', {'type': 'messages:edit', 'payload': {...}}))
 ```
 
 User-level events (`chats:added`, `chats:removed`) still publish to individual `user:{user_id}` channels since they target specific users.

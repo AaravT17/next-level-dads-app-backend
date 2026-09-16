@@ -1,16 +1,19 @@
+import logging
 from datetime import datetime
 from uuid import UUID
 import asyncpg
 from fastapi import HTTPException, status
-from app.common.config.constants import (
-    PROFILES_PAGE_LIMIT,
-)
+from app.common.config.constants import PROFILES_PAGE_LIMIT
+from app.common.utils.tasks import spawn, safe_publish
 from app.modules.connections.models import (
     ConnectionProfileResponse,
     ConnectionStatusResponse,
 )
 import json
 from app.modules.connections.utils import resolve_connection_status
+import app.modules.notifications.service as notifications_service
+
+logger = logging.getLogger(__name__)
 
 
 async def get_connections(
@@ -105,6 +108,7 @@ async def get_outgoing_requests(
 
 async def send_connection_request(
     conn: asyncpg.Connection,
+    pool: asyncpg.Pool,
     curr_user_id: UUID,
     target_user_id: UUID,
     note: str | None = None,
@@ -120,7 +124,9 @@ async def send_connection_request(
             INSERT INTO connections (requesting_id, requested_id, status, note)
             VALUES ($1, $2, 'pending', $3)
             ON CONFLICT DO NOTHING
-            RETURNING requesting_id, status
+            RETURNING requesting_id, status,
+                (SELECT name FROM users WHERE id = $1) AS from_name,
+                (SELECT avatar_url FROM users WHERE id = $1) AS from_avatar_url
             """,
             curr_user_id,
             target_user_id,
@@ -150,6 +156,13 @@ async def send_connection_request(
                 )
             ), False
 
+        payload = {
+            'from_id': str(curr_user_id),
+            'from_name': res['from_name'],
+            'from_avatar_url': res['from_avatar_url'],
+        }
+        spawn(_notify_connection_request(pool, target_user_id, payload))
+
         return ConnectionStatusResponse(
             connection_status=resolve_connection_status(
                 user_id=curr_user_id,
@@ -173,6 +186,7 @@ async def send_connection_request(
 
 async def accept_connection_request(
     conn: asyncpg.Connection,
+    pool: asyncpg.Pool,
     from_user_id: UUID,
     curr_user_id: UUID,
 ):
@@ -192,7 +206,9 @@ async def accept_connection_request(
             UPDATE connections
             SET status = 'accepted', updated_at = NOW()
             WHERE requesting_id = $1 AND requested_id = $2 AND status = 'pending'
-            RETURNING requesting_id, status
+            RETURNING requesting_id, status,
+                (SELECT name FROM users WHERE id = $2) AS by_name,
+                (SELECT avatar_url FROM users WHERE id = $2) AS by_avatar_url
             """,
             from_user_id,
             curr_user_id,
@@ -209,6 +225,13 @@ async def accept_connection_request(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Failed to accept connection request. Please try again later.',
         )
+
+    payload = {
+        'by_id': str(curr_user_id),
+        'by_name': res['by_name'],
+        'by_avatar_url': res['by_avatar_url'],
+    }
+    spawn(_notify_connection_accepted(pool, from_user_id, payload))
 
 
 async def remove_connection(
@@ -238,6 +261,20 @@ async def remove_connection(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Failed to remove connection. Please try again later.',
         )
+
+
+async def _notify_connection_request(pool: asyncpg.Pool, target_user_id: UUID, payload: dict) -> None:
+    """Insert connection_request notification and publish WS event. Best-effort."""
+    async with pool.acquire() as conn:
+        await notifications_service.create_notification(conn, target_user_id, 'connection_request', payload)
+    await safe_publish(f'user:{target_user_id}', {'type': 'connections:request', 'payload': payload})
+
+
+async def _notify_connection_accepted(pool: asyncpg.Pool, requester_id: UUID, payload: dict) -> None:
+    """Insert connection_accepted notification and publish WS event. Best-effort."""
+    async with pool.acquire() as conn:
+        await notifications_service.create_notification(conn, requester_id, 'connection_accepted', payload)
+    await safe_publish(f'user:{requester_id}', {'type': 'connections:accepted', 'payload': payload})
 
 
 def _build_get_connections_query(

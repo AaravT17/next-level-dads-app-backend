@@ -10,7 +10,7 @@ from app.common.config.constants import (
     CHAT_PARTICIPANTS_PAGE_LIMIT,
     CHAT_ADDABLE_PARTICIPANTS_PAGE_LIMIT,
 )
-from app.common.config.redis import publish
+from app.common.utils.tasks import spawn, safe_publish
 import app.modules.notifications.service as notifications_service
 from app.modules.chats.models import (
     ChatResponse,
@@ -107,19 +107,6 @@ _CHAT_PREVIEW_QUERY = """
 
 logger = logging.getLogger(__name__)
 
-# The event loop holds only a *weak* reference to a task, so a fire-and-forget
-# create_task() whose return value is discarded can be garbage-collected before
-# it finishes. That surfaces as a WebSocket event that silently never arrives --
-# rare, unreproducible, and invisible because _safe_publish swallows errors.
-# Keeping a strong reference until the task completes is the documented fix.
-_background_tasks: set[asyncio.Task] = set()
-
-
-def _spawn(coro) -> None:
-    """Run a coroutine in the background and keep it alive until it finishes."""
-    task = asyncio.create_task(coro)
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
 
 
 async def get_chat_previews(
@@ -278,7 +265,7 @@ async def create_chat(
         'added_by_name': creator_name,
     }
     all_participant_ids = [user_id] + body.participant_ids
-    _spawn(_notify_chat_added(pool, all_participant_ids, user_id, payload, is_group))
+    spawn(_notify_chat_added(pool, all_participant_ids, user_id, payload, is_group))
 
     return {'id': str(chat_id), 'created': True}
 
@@ -492,16 +479,9 @@ async def send_message(
     msg_payload['chat_name'] = row['chat_name']
     msg_payload['chat_type'] = row['chat_type']
     msg_payload['chat_avatar_url'] = None  # no group avatars yet
-    _spawn(_safe_publish(f'chat:{chat_id}', {'type': 'messages:new', 'payload': msg_payload}))
+    spawn(safe_publish(f'chat:{chat_id}', {'type': 'messages:new', 'payload': msg_payload}))
 
     return msg
-
-
-async def _safe_publish(channel: str, event: dict) -> None:
-    try:
-        await publish(channel, event)
-    except Exception:
-        logger.exception('Failed to publish %s event to channel %s', event.get('type'), channel)
 
 
 async def _notify_chat_added(
@@ -517,7 +497,7 @@ async def _notify_chat_added(
         async with pool.acquire() as conn:
             await notifications_service.create_notifications_bulk(conn, notifications)
     await asyncio.gather(
-        *[_safe_publish(f'user:{uid}', {'type': 'chats:added', 'payload': payload}) for uid in participant_ids]
+        *[safe_publish(f'user:{uid}', {'type': 'chats:added', 'payload': payload}) for uid in participant_ids]
     )
 
 
@@ -534,7 +514,7 @@ async def _publish_community_invite(
     When the DM was just created, publishes chats:added first so the connection
     manager subscribes both users to the chat channel before the messages:new
     event arrives. Running both steps in a single background task guarantees
-    ordering — separate _spawn calls do not.
+    ordering — separate spawn calls do not.
     """
     if chat_created:
         added_payload = {
@@ -547,10 +527,10 @@ async def _publish_community_invite(
         }
         added_event = {'type': 'chats:added', 'payload': added_payload}
         await asyncio.gather(
-            _safe_publish(f'user:{recipient_id}', added_event),
-            _safe_publish(f'user:{sender_id}', added_event),
+            safe_publish(f'user:{recipient_id}', added_event),
+            safe_publish(f'user:{sender_id}', added_event),
         )
-    await _safe_publish(f'chat:{chat_id}', {'type': 'messages:new', 'payload': msg_payload})
+    await safe_publish(f'chat:{chat_id}', {'type': 'messages:new', 'payload': msg_payload})
 
 
 async def edit_message(
@@ -583,8 +563,8 @@ async def edit_message(
             detail='Failed to edit message. Please try again later.',
         )
 
-    _spawn(
-        _safe_publish(
+    spawn(
+        safe_publish(
             f'chat:{chat_id}',
             {
                 'type': 'messages:edit',
@@ -630,8 +610,8 @@ async def delete_message(
             detail='Failed to delete message. Please try again later.',
         )
 
-    _spawn(
-        _safe_publish(
+    spawn(
+        safe_publish(
             f'chat:{chat_id}',
             {
                 'type': 'messages:delete',
@@ -800,7 +780,7 @@ async def add_participants(
             'added_by': str(user_id),
             'added_by_name': validation['adder_name'],
         }
-        _spawn(_notify_chat_added(pool, added_user_ids, user_id, payload, is_group=True))
+        spawn(_notify_chat_added(pool, added_user_ids, user_id, payload, is_group=True))
 
     return [ChatParticipantResponse(**dict(r)) for r in res]
 
@@ -853,7 +833,7 @@ async def remove_participant(
             detail='Failed to remove participant. Please try again later.',
         )
 
-    _spawn(_safe_publish(f'user:{participant_id}', {'type': 'chats:removed', 'payload': {'chat_id': str(chat_id)}}))
+    spawn(safe_publish(f'user:{participant_id}', {'type': 'chats:removed', 'payload': {'chat_id': str(chat_id)}}))
     return
 
 
@@ -893,7 +873,7 @@ async def leave_chat(
             detail='Failed to leave chat. Please try again later.',
         )
 
-    _spawn(_safe_publish(f'user:{user_id}', {'type': 'chats:removed', 'payload': {'chat_id': str(chat_id)}}))
+    spawn(safe_publish(f'user:{user_id}', {'type': 'chats:removed', 'payload': {'chat_id': str(chat_id)}}))
     return
 
 
@@ -1244,7 +1224,7 @@ async def send_community_invites(
         msg_payload['chat_name'] = None
         msg_payload['chat_type'] = 'dm'
         msg_payload['chat_avatar_url'] = None
-        _spawn(
+        spawn(
             _publish_community_invite(
                 sender_id,
                 recipient_id,
