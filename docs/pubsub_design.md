@@ -30,7 +30,7 @@ Two channel types:
 | `chat:{chat_id}` | `messages:new`    | Full `MessageResponse` + `chat_name`, `chat_type`, `chat_avatar_url`                           | Fan out to subscribed connections | Append message (dedup by id)    |
 | `chat:{chat_id}` | `messages:edit`   | `{id, chat_id, content, edited_at, is_deleted}`                                                | Fan out to subscribed connections | Update message in place         |
 | `chat:{chat_id}` | `messages:delete` | `{id, chat_id, content: '', is_deleted: true, edited_at: null}`                                | Fan out to subscribed connections | Mark message deleted            |
-| `user:{user_id}` | `chats:added`     | `{chat_id, chat_name, chat_type, chat_avatar_url, added_by, added_by_name}`                    | Subscribe to chat channel         | Fetch chat preview, add to list |
+| `user:{user_id}` | `chats:added`     | `{chat_id, chat_name, chat_type, chat_avatar_url, added_by, added_by_name, notification_id?, notification_created_at?}` | Subscribe to chat channel         | Fetch chat preview, add to list |
 | `user:{user_id}` | `chats:removed`   | `{chat_id}`                                                                                    | Unsubscribe from chat channel     | Remove chat from list           |
 | `user:{user_id}` | `chats:read`      | `{chat_id, last_read_at}`                                                                      | Forward to user's connections     | Update read state               |
 
