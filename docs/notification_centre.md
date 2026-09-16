@@ -97,12 +97,29 @@ Separate from `user_preferences` because these are operational timestamps, not u
 ### Read/unread mechanics
 
 - **Unread count**: `SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND created_at > COALESCE(last_read_at, epoch) AND created_at > COALESCE(last_cleared_at, epoch)`
-- **No per-notification `is_read`** — opening the centre marks everything read in one write (`last_read_at = NOW()`). No N-write fan-out.
-- **Clear all** sets both `last_read_at = NOW()` and `last_cleared_at = NOW()`.
+- **No per-notification `is_read`** — opening the centre marks everything read in one write. No N-write fan-out.
+- **Monotonic updates** — all timestamp writes use `GREATEST(COALESCE(col, NOW()), NOW())` so a concurrent or delayed request can never regress the value.
+- **Clear all** sets both `last_read_at` and `last_cleared_at` (same GREATEST pattern).
 
 ---
 
 ## API
+
+### `GET /api/users/me` (updated)
+
+`MeResponse` now includes a `notification_state` object:
+
+```jsonc
+{
+  // ... existing fields ...
+  "notification_state": {
+    "last_read_at": "2026-09-15T10:00:00Z",   // null if never read
+    "last_cleared_at": "2026-09-14T08:00:00Z"  // null if never cleared
+  }
+}
+```
+
+Sourced via `LEFT JOIN user_notification_state`. The frontend stores these on the auth user object and updates them via WS events using max-comparison logic (never regresses).
 
 ### `GET /api/notifications?cursor_created_at={created_at}&cursor_id={id}&limit=20`
 
@@ -125,7 +142,7 @@ Lightweight endpoint returning just the unread count. Used during app hydration 
 | `connections:request`   | `{ from_id, from_name, from_avatar_url }` | connections service   |
 | `connections:accepted`  | `{ by_id, by_name, by_avatar_url }`       | connections service   |
 | `notifications:read`    | `{ last_read_at }`                        | WS router (broadcast) |
-| `notifications:cleared` | `{ last_cleared_at }`                     | WS router (broadcast) |
+| `notifications:cleared` | `{ last_read_at, last_cleared_at }`       | WS router (broadcast) |
 
 ### Updated outbound event payloads
 
@@ -232,8 +249,13 @@ All unread count badges use the same style: red circle with white number, capped
 
 ### On open
 
+- Snapshot `user.notificationState.lastReadAt` at mount time (before marking read)
 - Optimistically set badge count to 0
 - Send `notifications:read` WS message → backend updates `last_read_at`
+- New (unread) notifications get a subtle background highlight so they stand out visually
+- A thin divider line separates the last new notification from the first previously-seen one
+- If all notifications are previously seen (nothing new), no line or highlight — plain list
+- If all notifications are new (`lastReadAt` is null or everything is newer), all highlighted, no line
 
 ### On "Clear all"
 

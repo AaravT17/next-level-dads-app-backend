@@ -64,6 +64,11 @@ class LegalAcceptancesData(BaseModel):
     privacy_policy: bool = False
 
 
+class NotificationStateData(BaseModel):
+    last_read_at: datetime | None = None
+    last_cleared_at: datetime | None = None
+
+
 class MeResponse(UserBase):
     goals: list[str] | None = None
     primary_goal: str | None = None
@@ -72,6 +77,7 @@ class MeResponse(UserBase):
     is_admin: bool = False
     preferences: PreferencesData
     legal_acceptances: LegalAcceptancesData
+    notification_state: NotificationStateData
 
 
 class UserProfileResponse(UserBase):

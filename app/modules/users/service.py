@@ -29,6 +29,7 @@ async def get_me(conn: asyncpg.Connection, user_id: str) -> MeResponse:
             data['icebreakers'] = json.loads(data['icebreakers'])
         data['preferences'] = json.loads(data['preferences'])
         data['legal_acceptances'] = json.loads(data['legal_acceptances'])
+        data['notification_state'] = json.loads(data['notification_state'])
         return MeResponse(**data)
     except HTTPException:
         raise
@@ -416,10 +417,15 @@ def _build_get_me_query(user_id: str) -> tuple[str, list]:
                     SELECT 1 FROM user_legal_acceptances ula
                     WHERE ula.user_id = up.id AND ula.document_type = 'privacy_policy'
                 )
-            )::jsonb AS legal_acceptances
+            )::jsonb AS legal_acceptances,
+            json_build_object(
+                'last_read_at', uns.last_read_at,
+                'last_cleared_at', uns.last_cleared_at
+            )::jsonb AS notification_state
         FROM user_profiles up
         JOIN public.users u ON u.id = up.id
         LEFT JOIN user_preferences pref ON pref.user_id = up.id
+        LEFT JOIN user_notification_state uns ON uns.user_id = up.id
         WHERE up.id = $1
     """
     return query, params

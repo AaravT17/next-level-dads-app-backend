@@ -131,7 +131,7 @@ async def mark_read(conn: asyncpg.Connection, user_id: str) -> datetime:
         INSERT INTO user_notification_state (user_id, last_read_at)
         VALUES ($1, NOW())
         ON CONFLICT (user_id)
-        DO UPDATE SET last_read_at = NOW()
+        DO UPDATE SET last_read_at = GREATEST(COALESCE(user_notification_state.last_read_at, NOW()), NOW())
         RETURNING last_read_at
         """,
         UUID(user_id),
@@ -139,18 +139,20 @@ async def mark_read(conn: asyncpg.Connection, user_id: str) -> datetime:
     return now
 
 
-async def clear_all(conn: asyncpg.Connection, user_id: str) -> datetime:
-    now = await conn.fetchval(
+async def clear_all(conn: asyncpg.Connection, user_id: str) -> tuple[datetime, datetime]:
+    row = await conn.fetchrow(
         """
         INSERT INTO user_notification_state (user_id, last_read_at, last_cleared_at)
         VALUES ($1, NOW(), NOW())
         ON CONFLICT (user_id)
-        DO UPDATE SET last_read_at = NOW(), last_cleared_at = NOW()
-        RETURNING last_cleared_at
+        DO UPDATE SET
+            last_read_at = GREATEST(COALESCE(user_notification_state.last_read_at, NOW()), NOW()),
+            last_cleared_at = GREATEST(COALESCE(user_notification_state.last_cleared_at, NOW()), NOW())
+        RETURNING last_read_at, last_cleared_at
         """,
         UUID(user_id),
     )
-    return now
+    return row['last_read_at'], row['last_cleared_at']
 
 
 def _build_get_notifications_query(

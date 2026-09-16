@@ -200,12 +200,15 @@ async def chat_websocket(ws: WebSocket):
             elif msg_type == 'notifications:cleared':
                 try:
                     async with ws.app.state.pool.acquire() as conn:
-                        last_cleared_at = await notifications_service.clear_all(conn, user_id)
+                        last_read_at, last_cleared_at = await notifications_service.clear_all(conn, user_id)
                     await publish(
                         f'user:{user_id}',
                         {
                             'type': 'notifications:cleared',
-                            'payload': {'last_cleared_at': last_cleared_at.isoformat()},
+                            'payload': {
+                                'last_read_at': last_read_at.isoformat(),
+                                'last_cleared_at': last_cleared_at.isoformat(),
+                            },
                         },
                     )
                 except Exception:

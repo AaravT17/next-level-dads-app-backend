@@ -235,7 +235,7 @@ CREATE INDEX ON messages (shared_community_id) WHERE shared_community_id IS NOT 
 CREATE OR REPLACE FUNCTION bump_chat_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
-    UPDATE chats SET updated_at = NOW() WHERE id = NEW.chat_id;
+    UPDATE chats SET updated_at = GREATEST(updated_at, NOW()) WHERE id = NEW.chat_id;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

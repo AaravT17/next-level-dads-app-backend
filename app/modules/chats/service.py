@@ -1095,7 +1095,7 @@ async def mark_chat_read(conn: asyncpg.Connection, user_id: str, chat_id: str) -
     return await conn.fetchval(
         """
         UPDATE chat_participants
-        SET last_read_at = NOW()
+        SET last_read_at = GREATEST(COALESCE(last_read_at, NOW()), NOW())
         WHERE user_id = $1 AND chat_id = $2
         RETURNING last_read_at
         """,
