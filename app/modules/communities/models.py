@@ -33,6 +33,11 @@ class CommunityResponse(BaseModel):
     created_at: datetime
     is_member: bool = False
     role: Literal['admin', 'member'] | None = None
+    # Conversations with activity since the caller last opened this community.
+    # Only "my communities" computes it; discover and single-community reads return
+    # 0, since a non-member has no watermark and nothing to come back to.
+    # Saturates at NEW_ACTIVITY_CAP -- the UI renders 99+ past that anyway.
+    new_activity_count: int = Field(ge=0, default=0)
 
 
 class AuthorInfo(BaseModel):

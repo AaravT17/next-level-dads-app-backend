@@ -116,6 +116,20 @@ async def leave_community(
     await communities_service.leave_community(conn, id, user_id)
 
 
+@router.post('/{id}/visit', status_code=status.HTTP_204_NO_CONTENT)
+async def mark_community_visited(
+    id: str,
+    conn: asyncpg.Connection = Depends(get_db),
+    user_id: str = Depends(get_consented_user),
+):
+    """Clear the caller's new-activity count for this community.
+
+    Unrated: the client throttles it to one call per community per minute, and it is
+    idempotent -- replaying it only re-stamps the same row with a later NOW().
+    """
+    await communities_service.mark_community_visited(conn, id, user_id)
+
+
 @router.put(
     '/{id}/image',
     dependencies=[Depends(get_consented_user), Depends(UpdateCommunityImageLimiter())]

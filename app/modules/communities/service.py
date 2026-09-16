@@ -146,6 +146,46 @@ _CONVERSATION_UNREPORTED_SQL = """
     )
 """
 
+# The most conversations a community card will ever claim. The badge renders 99+
+# past this, so counting further buys nothing -- and the LIMIT it feeds turns an
+# unbounded COUNT over a busy community into a fixed-cost index scan.
+NEW_ACTIVITY_CAP = 100
+
+# "N conversations active since you last visited", per community card.
+#
+# Counts threads with new activity rather than individual posts: one thread with
+# forty replies is one thing to come back to, not forty. That also means the whole
+# count is a range scan on idx_conversations_community_activity
+# (community_id, last_activity_at DESC), which already exists -- no denormalised
+# community_id on messages, and no backfill.
+#
+# Assumes `c` is the community and `cm` the caller's membership row, so it only
+# composes into queries that join both. It cannot reuse _CONVERSATION_VISIBLE_SQL:
+# that fragment hardcodes `c` as the conversation, which is the community here.
+_NEW_ACTIVITY_COUNT_SQL = f"""
+    (
+        SELECT COUNT(*) FROM (
+            SELECT 1 FROM conversations conv
+            WHERE conv.community_id = c.id
+              AND conv.last_activity_at > COALESCE(cm.last_visited_at, cm.joined_at)
+              AND NOT conv.is_deleted
+              AND (
+                  EXISTS (
+                      SELECT 1 FROM moderation_filtered_messages mfm
+                      WHERE mfm.content_type = 'conversation'
+                        AND mfm.content_id = conv.id
+                        AND mfm.layer = 'report'
+                  )
+                  OR NOT EXISTS (
+                      SELECT 1 FROM moderation_filtered_messages mfm
+                      WHERE mfm.content_type = 'conversation' AND mfm.content_id = conv.id
+                  )
+              )
+            LIMIT {NEW_ACTIVITY_CAP}
+        ) t
+    ) AS new_activity_count
+"""
+
 _TIME_WINDOW_SQL: dict[str, str] = {
     'today': "AND c.last_activity_at >= NOW() - INTERVAL '1 day'",
     'week': "AND c.last_activity_at >= NOW() - INTERVAL '7 days'",
@@ -409,6 +449,34 @@ async def leave_community(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Failed to leave community. Please try again later.',
+        )
+
+
+async def mark_community_visited(
+    conn: asyncpg.Connection,
+    community_id: str,
+    user_id: str,
+):
+    """Stamp the caller's visit, clearing their new-activity count for this community.
+
+    A no-op for non-members: there is no membership row to stamp, and someone who
+    has not joined has no badge to clear. That is silent rather than a 404 because
+    the caller is a fire-and-forget side effect of opening a page, not a request for
+    anything -- the client has no use for the failure and should not surface one.
+    """
+    try:
+        await conn.execute(
+            """
+            UPDATE community_members SET last_visited_at = NOW()
+            WHERE community_id = $1 AND user_id = $2
+            """,
+            UUID(community_id),
+            UUID(user_id),
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to record community visit. Please try again later.',
         )
 
 
@@ -1252,24 +1320,26 @@ async def reply_to_message(
     author_id: UUID,
     body: str,
 ) -> ReplyResponse:
-    exists = await conn.fetchval(
+    # Fetch the parent conversation id rather than a bare EXISTS: a reply is
+    # activity in that thread, and last_activity_at has to move for it.
+    conversation_id = await conn.fetchval(
         """
-        SELECT EXISTS(
-            SELECT 1
-            FROM conversation_messages m
-            JOIN conversations c ON c.id = m.conversation_id
-            WHERE m.id = $1 AND NOT m.is_deleted AND NOT c.is_deleted
-        )
+        SELECT c.id
+        FROM conversation_messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE m.id = $1 AND NOT m.is_deleted AND NOT c.is_deleted
         """,
         message_id,
     )
-    if not exists:
+    if conversation_id is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail='Message not found.',
         )
 
-    row = await insert_reply(conn, message_id, author_id, body)
+    async with conn.transaction():
+        row = await insert_reply(conn, message_id, author_id, body)
+        await touch_conversation(conn, conversation_id)
     record = await conn.fetchrow(
         f"""
         SELECT
@@ -1382,7 +1452,11 @@ def _build_discover_communities_query(
     query = f"""
         SELECT c.*,
         (SELECT COUNT(*) FROM community_members cm WHERE cm.community_id = c.id) AS member_count,
-        FALSE AS is_member, NULL AS role
+        FALSE AS is_member, NULL AS role,
+        -- Discover only lists communities the caller is NOT in, so there is no
+        -- watermark and nothing to return to. Selected as a literal to keep
+        -- CommunityResponse uniform across every read path.
+        0 AS new_activity_count
         FROM communities c
         WHERE {where_clause}
         ORDER BY c.created_at DESC, c.id DESC
@@ -1416,7 +1490,9 @@ def _build_get_user_communities_query(
     where_clause = ' AND '.join(conditions)
     query = f"""
         SELECT c.*,
-        (SELECT COUNT(*) FROM community_members cm WHERE cm.community_id = c.id) AS member_count, cm.role, TRUE AS is_member
+        (SELECT COUNT(*) FROM community_members m WHERE m.community_id = c.id) AS member_count,
+        cm.role, TRUE AS is_member,
+        {_NEW_ACTIVITY_COUNT_SQL}
         FROM communities c
         JOIN community_members cm ON c.id = cm.community_id
         WHERE {where_clause}
@@ -1431,8 +1507,12 @@ def _build_get_user_communities_query(
 def _build_get_community_query(id: UUID, user_id: UUID) -> tuple[str, list]:
     query = """
         SELECT c.*,
-        (SELECT COUNT(*) FROM community_members cm WHERE cm.community_id = c.id) AS member_count,
-        cm.role, (CASE WHEN cm.user_id IS NOT NULL THEN TRUE ELSE FALSE END) AS is_member
+        (SELECT COUNT(*) FROM community_members m WHERE m.community_id = c.id) AS member_count,
+        cm.role, (CASE WHEN cm.user_id IS NOT NULL THEN TRUE ELSE FALSE END) AS is_member,
+        -- The badge belongs to the list you scan, not the page you are already on:
+        -- opening this community is what clears it. Kept as a literal so every read
+        -- path returns the same shape.
+        0 AS new_activity_count
         FROM communities c
         LEFT JOIN community_members cm ON c.id = cm.community_id AND cm.user_id = $2
         WHERE c.id = $1

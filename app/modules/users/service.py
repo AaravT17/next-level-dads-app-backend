@@ -351,7 +351,22 @@ async def get_user_stats(conn: asyncpg.Connection, user_id: str) -> UserStatsRes
                     AND (requesting_id = $1 OR requested_id = $1)) AS connections,
                 (SELECT COUNT(*) FROM connections WHERE status = 'pending' AND requested_id = $1) AS requests,
                 (SELECT COUNT(*) FROM community_members WHERE user_id = $1) AS communities_joined,
-                (SELECT COUNT(*) FROM event_attendees WHERE user_id = $1) AS events_registered_for
+                (SELECT COUNT(*) FROM event_attendees WHERE user_id = $1) AS events_registered_for,
+                -- How many of your communities moved since you last opened them.
+                -- Communities, not threads: a nav badge reading "3" is legible, a
+                -- summed thread total is not. EXISTS also stops at the first
+                -- matching index entry, so a busy community costs the same as a
+                -- quiet one. Skips the moderation-visibility check the community
+                -- cards apply -- an extra correlated pair per membership is not
+                -- worth an edge case that resolves the moment the list is opened.
+                (SELECT COUNT(*) FROM community_members cm
+                 WHERE cm.user_id = $1
+                   AND EXISTS (
+                       SELECT 1 FROM conversations conv
+                       WHERE conv.community_id = cm.community_id
+                         AND conv.last_activity_at > COALESCE(cm.last_visited_at, cm.joined_at)
+                         AND NOT conv.is_deleted
+                   )) AS communities_with_new_activity
             """,
             UUID(user_id),
         )

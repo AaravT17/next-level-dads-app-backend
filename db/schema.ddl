@@ -136,12 +136,20 @@ CREATE TABLE communities (
 -- ── Community Members ─────────────────────────────────────────────────────────
 
 CREATE TABLE community_members (
-    community_id UUID REFERENCES communities(id) ON DELETE CASCADE,
-    user_id      UUID REFERENCES users(id) ON DELETE CASCADE,
-    role         TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
-    joined_at    TIMESTAMPTZ DEFAULT now(),
+    community_id    UUID REFERENCES communities(id) ON DELETE CASCADE,
+    user_id         UUID REFERENCES users(id) ON DELETE CASCADE,
+    role            TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
+    joined_at       TIMESTAMPTZ DEFAULT now(),
+    -- NULL until the member first opens the community. Reads COALESCE to joined_at,
+    -- so a never-stamped member sees what is new since they joined rather than the
+    -- community's whole history.
+    last_visited_at TIMESTAMPTZ,
     PRIMARY KEY (community_id, user_id)
 );
+
+-- The composite PK leads with community_id, so it cannot serve the user_id-only
+-- filter that "my communities" and the nav-badge aggregate both use.
+CREATE INDEX idx_community_members_user ON community_members (user_id);
 
 
 -- ── Events ────────────────────────────────────────────────────────────────────
