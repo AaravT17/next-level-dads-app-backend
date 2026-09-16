@@ -266,15 +266,23 @@ async def remove_connection(
 async def _notify_connection_request(pool: asyncpg.Pool, target_user_id: UUID, payload: dict) -> None:
     """Insert connection_request notification and publish WS event. Best-effort."""
     async with pool.acquire() as conn:
-        await notifications_service.create_notification(conn, target_user_id, 'connection_request', payload)
-    await safe_publish(f'user:{target_user_id}', {'type': 'connections:request', 'payload': payload})
+        notif = await notifications_service.create_notification(conn, target_user_id, 'connection_request', payload)
+    ws_payload = {**payload}
+    if notif:
+        ws_payload['notification_id'] = str(notif.id)
+        ws_payload['notification_created_at'] = notif.created_at.isoformat()
+    await safe_publish(f'user:{target_user_id}', {'type': 'connections:request', 'payload': ws_payload})
 
 
 async def _notify_connection_accepted(pool: asyncpg.Pool, requester_id: UUID, payload: dict) -> None:
     """Insert connection_accepted notification and publish WS event. Best-effort."""
     async with pool.acquire() as conn:
-        await notifications_service.create_notification(conn, requester_id, 'connection_accepted', payload)
-    await safe_publish(f'user:{requester_id}', {'type': 'connections:accepted', 'payload': payload})
+        notif = await notifications_service.create_notification(conn, requester_id, 'connection_accepted', payload)
+    ws_payload = {**payload}
+    if notif:
+        ws_payload['notification_id'] = str(notif.id)
+        ws_payload['notification_created_at'] = notif.created_at.isoformat()
+    await safe_publish(f'user:{requester_id}', {'type': 'connections:accepted', 'payload': ws_payload})
 
 
 def _build_get_connections_query(

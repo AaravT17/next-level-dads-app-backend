@@ -137,12 +137,14 @@ Lightweight endpoint returning just the unread count. Used during app hydration 
 
 ### New outbound event types (server → client via `user:{user_id}`)
 
-| Event                   | Payload                                   | Published by          |
-| ----------------------- | ----------------------------------------- | --------------------- |
-| `connections:request`   | `{ from_id, from_name, from_avatar_url }` | connections service   |
-| `connections:accepted`  | `{ by_id, by_name, by_avatar_url }`       | connections service   |
-| `notifications:read`    | `{ last_read_at }`                        | WS router (broadcast) |
-| `notifications:cleared` | `{ last_read_at, last_cleared_at }`       | WS router (broadcast) |
+| Event                   | Payload                                                                    | Published by          |
+| ----------------------- | -------------------------------------------------------------------------- | --------------------- |
+| `connections:request`   | `{ from_id, from_name, from_avatar_url, notification_id?, notification_created_at? }` | connections service   |
+| `connections:accepted`  | `{ by_id, by_name, by_avatar_url, notification_id?, notification_created_at? }`       | connections service   |
+| `notifications:read`    | `{ last_read_at }`                                                         | WS router (broadcast) |
+| `notifications:cleared` | `{ last_read_at, last_cleared_at }`                                        | WS router (broadcast) |
+
+`notification_id` and `notification_created_at` are present when the notification was successfully persisted. The frontend uses them for cache insertion and badge count — if absent (DB insert failed), the notification is skipped in the centre and the badge is not incremented. The WS event is still published regardless so query invalidations (connection requests, stats, etc.) fire either way.
 
 ### Updated outbound event payloads
 
@@ -185,13 +187,11 @@ Each type gets its own `WebSocketRateLimiter` instance with a per-user Redis key
 2. connections/service.py:
    a. INSERT into connections table (status='pending')
    b. INSERT into notifications table (type='connection_request', user_id=B, payload={...})
-      — both in the same transaction
-   c. publish('user:{B}', { type: 'connections:request', payload: {from_id, from_name, from_avatar_url} })
+   c. publish('user:{B}', { type: 'connections:request', payload: {from_id, from_name, from_avatar_url, notification_id, notification_created_at} })
 3. User B's frontend receives the event:
    a. Invalidate ['connections', 'requests'] and ['user', 'stats'] query caches
-   b. Insert notification into notification query cache
-   c. Increment bell badge count locally
-   d. Show banner (if banners enabled)
+   b. If notification_id present: insert notification into cache using server ID, increment badge
+   c. Show banner (if banners enabled)
 ```
 
 ### Cross-session sync (mark read example)
@@ -237,12 +237,12 @@ All unread count badges use the same style: red circle with white number, capped
 
 ### Panel
 
-- Slide-down dropdown anchored to the bell icon (~380px on desktop, full-width sheet on mobile)
+- Popover dropdown anchored to the bell icon (~380px on desktop, right-side sheet on mobile)
 - Fade in + slide down animation, ~200ms
 - Header: "Notifications" title + "Clear all" button
 - List: chronological (newest first), each card is a full-width tap target
 - Card layout: avatar left, text with bold names, relative timestamp right
-- Timestamps: minutes (<1h), hours (<24h), days (<7d), then date
+- Timestamps: "Just now" (<1m), minutes (<1h), hours (<24h), days (<7d), then date
 - Empty state: "You're all caught up"
 - Pagination: load more on scroll (keyset cursor)
 - Closes on: click outside, press bell again, or navigate away
@@ -265,7 +265,7 @@ All unread count badges use the same style: red circle with white number, capped
 
 ### Unread count management
 
-- On new notification-worthy WS event: always increment count locally (+1), regardless of whether cache insertion happened
+- On new notification-worthy WS event: increment count locally (+1) only when the event includes `notification_id` (confirming the notification was persisted)
 - On open: optimistically set to 0 (before server confirms)
 - If a new event arrives while the centre is open, count increments normally (acceptable edge case — unlikely in practice, and opening the centre again corrects it)
 
