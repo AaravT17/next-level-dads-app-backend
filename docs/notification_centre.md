@@ -289,12 +289,12 @@ Same pattern as message cache insertion: if the notification's insert position i
 
 ### Implementation
 
-Built on **Sonner** with a dedicated `<Toaster>` instance (separate from the existing system/moderation toaster):
+Built on **Sonner** using the existing `<Toaster>` instance. Sonner 1.7.x doesn't support independent toaster instances (`toasterId`), so banners share the Toaster but use per-toast overrides:
 
-- `position="top-center"`
-- `visibleToasts={3}` — stacked (card-deck style), newest at front
-- `unstyled={true}` with custom full-width styling
-- Auto-dismiss after ~4 seconds, pause on hover
+- `position: 'top-center'` (per-toast, system toasts stay at their default position)
+- `unstyled: true` (per-toast, so Toaster's themed classNames don't wrap the banner card)
+- `duration: BANNER_DISMISS_MS` (configurable constant, default 3s)
+- `visibleToasts={3}` on the Toaster — stacked (card-deck style), newest at front
 - Clickable — navigates to the relevant destination
 
 ### Banner content per type
