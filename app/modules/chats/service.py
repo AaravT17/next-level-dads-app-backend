@@ -11,6 +11,7 @@ from app.common.config.constants import (
     CHAT_ADDABLE_PARTICIPANTS_PAGE_LIMIT,
 )
 from app.common.config.redis import publish
+import app.modules.notifications.service as notifications_service
 from app.modules.chats.models import (
     ChatResponse,
     LastMessageResponse,
@@ -58,7 +59,6 @@ def _build_chat_preview_row(r) -> ChatResponse:
         last_message=last_message,
         other_user=other_user,
     )
-
 
 
 def _build_shared_community(r) -> SharedCommunityResponse | None:
@@ -184,6 +184,7 @@ async def create_chat(
     conn: asyncpg.Connection,
     user_id: UUID,
     body: CreateChatRequest,
+    pool: asyncpg.Pool,
 ) -> dict:
     chat_id: UUID | None = None
     # participant IDs are deduplicated by the validation layer, need not worry about that here
@@ -209,21 +210,33 @@ async def create_chat(
                 )
 
             if len(body.participant_ids) == 1:
-                chat_id = await conn.fetchval(
-                    "INSERT INTO chats (type, dm_user_1, dm_user_2) VALUES ('dm', $1, $2) RETURNING id",
+                is_group = False
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO chats (type, dm_user_1, dm_user_2) VALUES ('dm', $1, $2)
+                    RETURNING id, (SELECT name FROM users WHERE id = $1) AS creator_name
+                    """,
                     user_id,
                     body.participant_ids[0],
                 )  # can raise a UniqueViolationError if a DM chat between the two users already exists
+                chat_id = row['id']
+                creator_name = row['creator_name']
                 await conn.executemany(
                     'INSERT INTO chat_participants (chat_id, user_id) VALUES ($1, $2)',
                     [(chat_id, user_id), (chat_id, body.participant_ids[0])],
                 )
             else:
-                chat_id = await conn.fetchval(
-                    "INSERT INTO chats (type, name, created_by) VALUES ('group', $1, $2) RETURNING id",
+                is_group = True
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO chats (type, name, created_by) VALUES ('group', $1, $2)
+                    RETURNING id, (SELECT name FROM users WHERE id = $2) AS creator_name
+                    """,
                     body.name,
                     user_id,
                 )
+                chat_id = row['id']
+                creator_name = row['creator_name']
                 await conn.executemany(
                     'INSERT INTO chat_participants (chat_id, user_id, is_admin) VALUES ($1, $2, $3)',
                     [(chat_id, pid, False) for pid in body.participant_ids] + [(chat_id, user_id, True)],
@@ -255,10 +268,17 @@ async def create_chat(
             detail='Failed to create chat. Please try again later.',
         )
 
-    # publish chats:added to each participant's user channel, frontend fetches the preview itself
+    # publish chats:added and create notification rows (for group chats only)
+    payload = {
+        'chat_id': str(chat_id),
+        'chat_name': body.name if is_group else None,
+        'chat_type': 'group' if is_group else 'dm',
+        'chat_avatar_url': None,
+        'added_by': str(user_id),
+        'added_by_name': creator_name,
+    }
     all_participant_ids = [user_id] + body.participant_ids
-    event = {'type': 'chats:added', 'payload': {'chat_id': str(chat_id)}}
-    _spawn(asyncio.gather(*[_safe_publish(f'user:{uid}', event) for uid in all_participant_ids]))
+    _spawn(_notify_chat_added(pool, all_participant_ids, user_id, payload, is_group))
 
     return {'id': str(chat_id), 'created': True}
 
@@ -403,9 +423,33 @@ async def send_message(
     try:
         row = await conn.fetchrow(
             """
-            INSERT INTO messages (chat_id, sender_id, content, reply_to_id)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id, chat_id, sender_id, content, reply_to_id, edited_at, is_deleted, created_at
+            WITH inserted AS (
+                INSERT INTO messages (chat_id, sender_id, content, reply_to_id)
+                VALUES ($1, $2, $3, $4)
+                RETURNING id, chat_id, sender_id, content, reply_to_id, edited_at, is_deleted, created_at
+            )
+            SELECT
+                i.id, 
+                i.chat_id, 
+                i.sender_id, 
+                i.content, 
+                i.edited_at, 
+                i.is_deleted, 
+                i.created_at,
+                u.name AS sender_name,
+                u.avatar_url AS sender_avatar_url,
+                c.name AS chat_name,
+                c.type AS chat_type,
+                r.id AS reply_to_id,
+                r.content AS reply_to_content,
+                r.sender_id AS reply_to_sender_id,
+                r.is_deleted AS reply_to_is_deleted,
+                rs.name AS reply_to_sender_name
+            FROM inserted i
+            JOIN users u ON u.id = i.sender_id
+            JOIN chats c ON c.id = i.chat_id
+            LEFT JOIN messages r ON r.id = i.reply_to_id
+            LEFT JOIN users rs ON rs.id = r.sender_id
             """,
             chat_id,
             user_id,
@@ -418,55 +462,22 @@ async def send_message(
             detail='Failed to send message. Please try again later.',
         )
 
-    # fetch sender info and reply_to details in a single query
-    try:
-        extra = await conn.fetchrow(
-            """
-            SELECT
-                u.name AS sender_name,
-                u.avatar_url AS sender_avatar_url,
-                r.id AS reply_to_id,
-                r.content AS reply_to_content,
-                r.sender_id AS reply_to_sender_id,
-                r.is_deleted AS reply_to_is_deleted,
-                rs.name AS reply_to_sender_name
-            FROM users u
-            LEFT JOIN messages r ON r.id = $2
-            LEFT JOIN users rs ON rs.id = r.sender_id
-            WHERE u.id = $1
-            """,
-            user_id,
-            body.reply_to_id,
-        )
-        if extra is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail='Failed to send message. Please try again later.',
-            )
-    except HTTPException:
-        raise
-    except Exception as _:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to send message. Please try again later.',
-        )
-
     reply_to = None
-    if extra['reply_to_id'] is not None:
+    if row['reply_to_id'] is not None:
         reply_to = ReplyToResponse(
-            id=extra['reply_to_id'],
-            content='' if extra['reply_to_is_deleted'] else extra['reply_to_content'],
-            sender_id=extra['reply_to_sender_id'],
-            sender_name=extra['reply_to_sender_name'],
-            is_deleted=extra['reply_to_is_deleted'],
+            id=row['reply_to_id'],
+            content='' if row['reply_to_is_deleted'] else row['reply_to_content'],
+            sender_id=row['reply_to_sender_id'],
+            sender_name=row['reply_to_sender_name'],
+            is_deleted=row['reply_to_is_deleted'],
         )
 
     msg = MessageResponse(
         id=row['id'],
         chat_id=row['chat_id'],
         sender_id=row['sender_id'],
-        sender_name=extra['sender_name'],
-        sender_avatar_url=extra['sender_avatar_url'],
+        sender_name=row['sender_name'],
+        sender_avatar_url=row['sender_avatar_url'],
         content=row['content'],
         reply_to=reply_to,
         edited_at=row['edited_at'],
@@ -477,9 +488,11 @@ async def send_message(
     # Published on the chat's own channel, which reaches the sender's other
     # sockets too -- the per-user scheme had to exclude the sender and left them
     # unsynced across devices.
-    _spawn(
-        _safe_publish(f'chat:{chat_id}', {'type': 'messages:new', 'payload': msg.model_dump(mode='json')})
-    )
+    msg_payload = msg.model_dump(mode='json')
+    msg_payload['chat_name'] = row['chat_name']
+    msg_payload['chat_type'] = row['chat_type']
+    msg_payload['chat_avatar_url'] = None  # no group avatars yet
+    _spawn(_safe_publish(f'chat:{chat_id}', {'type': 'messages:new', 'payload': msg_payload}))
 
     return msg
 
@@ -489,6 +502,55 @@ async def _safe_publish(channel: str, event: dict) -> None:
         await publish(channel, event)
     except Exception:
         logger.exception('Failed to publish %s event to channel %s', event.get('type'), channel)
+
+
+async def _notify_chat_added(
+    pool: asyncpg.Pool,
+    participant_ids: list[UUID],
+    added_by: UUID,
+    payload: dict,
+    is_group: bool,
+) -> None:
+    """Create chat_added notification rows (for group chats only) and publish the WS event. Best-effort."""
+    if is_group:
+        notifications = [(uid, 'chat_added', payload) for uid in participant_ids if uid != added_by]
+        async with pool.acquire() as conn:
+            await notifications_service.create_notifications_bulk(conn, notifications)
+    await asyncio.gather(
+        *[_safe_publish(f'user:{uid}', {'type': 'chats:added', 'payload': payload}) for uid in participant_ids]
+    )
+
+
+async def _publish_community_invite(
+    sender_id: UUID,
+    recipient_id: UUID,
+    chat_id: UUID,
+    chat_created: bool,
+    sender_name: str | None,
+    msg_payload: dict,
+) -> None:
+    """Publish WS events for a community invite DM.
+
+    When the DM was just created, publishes chats:added first so the connection
+    manager subscribes both users to the chat channel before the messages:new
+    event arrives. Running both steps in a single background task guarantees
+    ordering — separate _spawn calls do not.
+    """
+    if chat_created:
+        added_payload = {
+            'chat_id': str(chat_id),
+            'chat_name': None,
+            'chat_type': 'dm',
+            'chat_avatar_url': None,
+            'added_by': str(sender_id),
+            'added_by_name': sender_name,
+        }
+        added_event = {'type': 'chats:added', 'payload': added_payload}
+        await asyncio.gather(
+            _safe_publish(f'user:{recipient_id}', added_event),
+            _safe_publish(f'user:{sender_id}', added_event),
+        )
+    await _safe_publish(f'chat:{chat_id}', {'type': 'messages:new', 'payload': msg_payload})
 
 
 async def edit_message(
@@ -651,6 +713,7 @@ async def add_participants(
     user_id: UUID,
     chat_id: UUID,
     body: AddParticipantsRequest,
+    pool: asyncpg.Pool,
 ) -> list[ChatParticipantResponse]:
     try:
         # verify that:
@@ -663,6 +726,8 @@ async def add_participants(
             SELECT
                 cp.is_admin,
                 c.type,
+                c.name AS chat_name,
+                (SELECT name FROM users WHERE id = $2) AS adder_name,
                 (SELECT array_agg(CASE WHEN requesting_id = $2 THEN requested_id ELSE requesting_id END)
                 FROM connections
                 WHERE (requesting_id = $2 OR requested_id = $2) AND status = 'accepted') AS connections
@@ -724,11 +789,18 @@ async def add_participants(
             detail='Failed to add participant. Please try again later.',
         )
 
-    # publish chats:added to each newly added participant's user channel, frontend fetches the preview itself
+    # notify added participants and publish chats:added (best-effort, background)
     added_user_ids = [r['id'] for r in res]
     if added_user_ids:
-        event = {'type': 'chats:added', 'payload': {'chat_id': str(chat_id)}}
-        _spawn(asyncio.gather(*[_safe_publish(f'user:{uid}', event) for uid in added_user_ids]))
+        payload = {
+            'chat_id': str(chat_id),
+            'chat_name': validation['chat_name'],
+            'chat_type': 'group',
+            'chat_avatar_url': None,
+            'added_by': str(user_id),
+            'added_by_name': validation['adder_name'],
+        }
+        _spawn(_notify_chat_added(pool, added_user_ids, user_id, payload, is_group=True))
 
     return [ChatParticipantResponse(**dict(r)) for r in res]
 
@@ -781,9 +853,7 @@ async def remove_participant(
             detail='Failed to remove participant. Please try again later.',
         )
 
-    _spawn(
-        _safe_publish(f'user:{participant_id}', {'type': 'chats:removed', 'payload': {'chat_id': str(chat_id)}})
-    )
+    _spawn(_safe_publish(f'user:{participant_id}', {'type': 'chats:removed', 'payload': {'chat_id': str(chat_id)}}))
     return
 
 
@@ -823,9 +893,7 @@ async def leave_chat(
             detail='Failed to leave chat. Please try again later.',
         )
 
-    _spawn(
-        _safe_publish(f'user:{user_id}', {'type': 'chats:removed', 'payload': {'chat_id': str(chat_id)}})
-    )
+    _spawn(_safe_publish(f'user:{user_id}', {'type': 'chats:removed', 'payload': {'chat_id': str(chat_id)}}))
     return
 
 
@@ -1122,6 +1190,13 @@ async def send_community_invites(
     # cost nothing. After the commit there is no honest way to fail the request.
     try:
         sender = await conn.fetchrow('SELECT name, avatar_url FROM users WHERE id = $1', sender_id)
+        if not sender:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail='Failed to send invites. Please try again later.',
+            )
+    except HTTPException:
+        raise
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1158,35 +1233,25 @@ async def send_community_invites(
             id=message_id,
             chat_id=chat_id,
             sender_id=sender_id,
-            sender_name=sender['name'] if sender else None,
-            sender_avatar_url=sender['avatar_url'] if sender else None,
+            sender_name=sender['name'],
+            sender_avatar_url=sender['avatar_url'],
             content=content,
             shared_community=community,
             is_deleted=False,
             created_at=created_at,
         )
-        # A DM that did not exist a moment ago has no subscriber on its channel
-        # yet, so the recipient is told to pick it up first. Order matters: the
-        # message event that follows would otherwise land on a channel nobody
-        # is listening to.
-        if chat_created:
-            _spawn(
-                _safe_publish(
-                    f'user:{recipient_id}',
-                    {'type': 'chats:added', 'payload': {'chat_id': str(chat_id)}},
-                )
-            )
-            _spawn(
-                _safe_publish(
-                    f'user:{sender_id}',
-                    {'type': 'chats:added', 'payload': {'chat_id': str(chat_id)}},
-                )
-            )
-
+        msg_payload = msg.model_dump(mode='json')
+        msg_payload['chat_name'] = None
+        msg_payload['chat_type'] = 'dm'
+        msg_payload['chat_avatar_url'] = None
         _spawn(
-            _safe_publish(
-                f'chat:{chat_id}',
-                {'type': 'messages:new', 'payload': msg.model_dump(mode='json')},
+            _publish_community_invite(
+                sender_id,
+                recipient_id,
+                chat_id,
+                chat_created,
+                sender['name'],
+                msg_payload,
             )
         )
 

@@ -25,14 +25,14 @@ Two channel types:
 
 ### Events
 
-| Channel          | Event             | Payload                                                         | Backend Action                    | Frontend Action                 |
-| ---------------- | ----------------- | --------------------------------------------------------------- | --------------------------------- | ------------------------------- |
-| `chat:{chat_id}` | `messages:new`    | Full `MessageResponse`                                          | Fan out to subscribed connections | Append message (dedup by id)    |
-| `chat:{chat_id}` | `messages:edit`   | `{id, chat_id, content, edited_at, is_deleted}`                 | Fan out to subscribed connections | Update message in place         |
-| `chat:{chat_id}` | `messages:delete` | `{id, chat_id, content: '', is_deleted: true, edited_at: null}` | Fan out to subscribed connections | Mark message deleted            |
-| `user:{user_id}` | `chats:added`     | `{chat_id}`                                                     | Subscribe to chat channel         | Fetch chat preview, add to list |
-| `user:{user_id}` | `chats:removed`   | `{chat_id}`                                                     | Unsubscribe from chat channel     | Remove chat from list           |
-| `user:{user_id}` | `chats:read`      | `{chat_id, last_read_at}`                                       | Forward to user's connections     | Update read state               |
+| Channel          | Event             | Payload                                                                                        | Backend Action                    | Frontend Action                 |
+| ---------------- | ----------------- | ---------------------------------------------------------------------------------------------- | --------------------------------- | ------------------------------- |
+| `chat:{chat_id}` | `messages:new`    | Full `MessageResponse` + `chat_name`, `chat_type`, `chat_avatar_url`                           | Fan out to subscribed connections | Append message (dedup by id)    |
+| `chat:{chat_id}` | `messages:edit`   | `{id, chat_id, content, edited_at, is_deleted}`                                                | Fan out to subscribed connections | Update message in place         |
+| `chat:{chat_id}` | `messages:delete` | `{id, chat_id, content: '', is_deleted: true, edited_at: null}`                                | Fan out to subscribed connections | Mark message deleted            |
+| `user:{user_id}` | `chats:added`     | `{chat_id, chat_name, chat_type, chat_avatar_url, added_by, added_by_name}`                    | Subscribe to chat channel         | Fetch chat preview, add to list |
+| `user:{user_id}` | `chats:removed`   | `{chat_id}`                                                                                    | Unsubscribe from chat channel     | Remove chat from list           |
+| `user:{user_id}` | `chats:read`      | `{chat_id, last_read_at}`                                                                      | Forward to user's connections     | Update read state               |
 
 ---
 
@@ -118,9 +118,13 @@ Lock needed for `chats:added` / `chats:removed` (mutate data structures + call s
 Single `publish(f'chat:{chat_id}', event)` instead of N publishes to individual user channels. No need to query participant IDs for publishing.
 
 ```python
-# send_message
+# send_message — payload is MessageResponse + chat metadata for banner display
+msg_payload = msg.model_dump(mode='json')
+msg_payload['chat_name'] = extra['chat_name']
+msg_payload['chat_type'] = extra['chat_type']
+msg_payload['chat_avatar_url'] = None
 asyncio.create_task(
-    _safe_publish(f'chat:{chat_id}', {'type': 'messages:new', 'payload': msg.model_dump(mode='json')})
+    _safe_publish(f'chat:{chat_id}', {'type': 'messages:new', 'payload': msg_payload})
 )
 
 # edit_message / delete_message — same pattern

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, status, Query, Request, Response
 from app.common.config.constants import IS_PRODUCTION
 from app.common.dependencies.rate_limiting import CreateChatLimiter, SendChatMessageLimiter
 from app.common.dependencies.auth import get_consented_user
-from app.common.dependencies.db import get_db
+from app.common.dependencies.db import get_db, get_pool
 import asyncpg
 from datetime import datetime
 from uuid import UUID
@@ -50,9 +50,10 @@ async def create_chat(
     request: Request,
     response: Response,
     conn: asyncpg.Connection = Depends(get_db),
+    pool: asyncpg.Pool = Depends(get_pool),
 ):
     await assert_not_banned(conn, UUID(request.state.user_id))
-    result = await chats_service.create_chat(conn, request.state.user_id, body)
+    result = await chats_service.create_chat(conn, request.state.user_id, body, pool)
     response.status_code = status.HTTP_201_CREATED if result['created'] else status.HTTP_200_OK
     return {'id': result['id']}
 
@@ -157,8 +158,9 @@ async def add_participants(
     body: AddParticipantsRequest,
     user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
+    pool: asyncpg.Pool = Depends(get_pool),
 ):
-    return await chats_service.add_participants(conn, user_id, chat_id, body)
+    return await chats_service.add_participants(conn, user_id, chat_id, body, pool)
 
 
 @router.delete('/{chat_id}/participants/me', status_code=status.HTTP_204_NO_CONTENT)

@@ -336,7 +336,7 @@ The chat page (`Chat.tsx`) currently does not handle 403/404 errors from the cha
 1. **Migration**: `notifications` table + `user_notification_state` table
 2. **Backend: notifications module** — models, service (create, list, count), router (`GET /api/notifications`, `GET /api/notifications/count`)
 3. **Backend: WS payload enrichment** — add `chat_name`, `chat_type`, `chat_avatar_url` to `messages:new`; add `added_by`, `added_by_name`, `chat_name`, `chat_type`, `chat_avatar_url` to `chats:added`
-4. **Backend: connection events** — publish `connections:request` and `connections:accepted` to `user:{user_id}` + insert notification row (same transaction)
+4. **Backend: connection events** — publish `connections:request` and `connections:accepted` to `user:{user_id}` + insert notification row
 5. **Backend: chat_added notifications** — insert `chat_added` notification rows when users are added to group chats (both on group creation and adding participants), alongside existing `chats:added` publishes
 6. **Backend: WS inbound handlers** — `notifications:read` and `notifications:cleared` message types, per-type rate limiters
 7. **Frontend: notification centre UI** — bell icon, badge, panel, notification list, pagination, clear all
