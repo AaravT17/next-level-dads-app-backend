@@ -17,7 +17,7 @@ ruff, which is not worth changing for three cases that await nothing real.
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -29,7 +29,7 @@ MESSAGE_ID = uuid4()
 CONVERSATION_ID = uuid4()
 AUTHOR_ID = uuid4()
 REPLY_ID = uuid4()
-NOW = datetime.now(timezone.utc)
+NOW = datetime.now(UTC)
 
 
 class _Transaction:
