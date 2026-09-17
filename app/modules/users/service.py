@@ -352,7 +352,22 @@ async def get_user_stats(conn: asyncpg.Connection, user_id: str) -> UserStatsRes
                     AND (requesting_id = $1 OR requested_id = $1)) AS connections,
                 (SELECT COUNT(*) FROM connections WHERE status = 'pending' AND requested_id = $1) AS requests,
                 (SELECT COUNT(*) FROM community_members WHERE user_id = $1) AS communities_joined,
-                (SELECT COUNT(*) FROM event_attendees WHERE user_id = $1) AS events_registered_for
+                (SELECT COUNT(*) FROM event_attendees WHERE user_id = $1) AS events_registered_for,
+                -- How many of your communities moved since you last opened them.
+                -- Communities, not threads: a nav badge reading "3" is legible, a
+                -- summed thread total is not. EXISTS also stops at the first
+                -- matching index entry, so a busy community costs the same as a
+                -- quiet one. Skips the moderation-visibility check the community
+                -- cards apply -- an extra correlated pair per membership is not
+                -- worth an edge case that resolves the moment the list is opened.
+                (SELECT COUNT(*) FROM community_members cm
+                 WHERE cm.user_id = $1
+                   AND EXISTS (
+                       SELECT 1 FROM conversations conv
+                       WHERE conv.community_id = cm.community_id
+                         AND conv.last_activity_at > COALESCE(cm.last_visited_at, cm.joined_at)
+                         AND NOT conv.is_deleted
+                   )) AS communities_with_new_activity
             """,
             UUID(user_id),
         )
@@ -499,7 +514,13 @@ def _build_discover_profiles_query(
         params.extend([cursor_created_at, cursor_id])
         i += 2
 
-    where_clause = "(c.id IS NULL OR (c.requesting_id = $1 AND c.status = 'pending')) AND "
+    # Browse is for dads you have not acted on yet, so the LEFT JOIN finding no
+    # connection row at all is the whole admission rule. A request you have
+    # already sent used to keep its card here in a waiting state; it no longer
+    # does, because there is nothing left to do with that card from the grid and
+    # it crowds out dads you could still act on. Every other state -- connected,
+    # blocked, or a request he sent you -- was already excluded by the same rule.
+    where_clause = 'c.id IS NULL AND '
 
     where_clause += ' AND '.join(conditions)
     query = f"""

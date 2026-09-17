@@ -246,6 +246,9 @@ class UserStatsResponse(BaseModel):
     requests: int
     communities_joined: int
     events_registered_for: int
+    # Communities with conversations active since the caller last opened them.
+    # Drives the Communities nav badge.
+    communities_with_new_activity: int = 0
 
 
 _FIELD_LABELS = {
