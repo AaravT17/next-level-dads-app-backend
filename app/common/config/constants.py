@@ -166,3 +166,9 @@ MODERATION_NOTIFICATIONS_PAGE_LIMIT = 20
 # --- Notifications ---
 NOTIFICATIONS_PAGE_LIMIT = 20
 NOTIFICATION_RETENTION_DAYS = 30
+
+# Community activity notifies as a digest, not per post. While a digest is
+# unseen it keeps counting; once the member opens the community it is cleared,
+# and this is how long must then pass before that community may raise a fresh
+# one. Six hours caps a busy community at four interruptions a day.
+COMMUNITY_ACTIVITY_COOLDOWN_HOURS = 6

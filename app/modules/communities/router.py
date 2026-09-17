@@ -255,6 +255,12 @@ async def create_conversation(
             cid,
             f'{payload.title}\n{payload.body}',
         )
+        background_tasks.add_task(
+            communities_service.notify_community_activity,
+            pool,
+            cid,
+            uid,
+        )
         return conversation
     except HTTPException:
         raise

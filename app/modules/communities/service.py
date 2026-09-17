@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from datetime import datetime
 import time
 from typing import Literal
@@ -31,6 +33,10 @@ from app.modules.communities.models import (
 )
 from app.modules.chats.models import SharedCommunityResponse
 import app.modules.chats.service as chats_service
+import app.modules.notifications.service as notifications_service
+from app.common.utils.tasks import safe_publish
+
+logger = logging.getLogger(__name__)
 
 
 REMOVED_CONVERSATION_TITLE = 'Removed post'
@@ -1380,6 +1386,48 @@ async def start_conversation(
 
     full = await get_conversation(conn, row['id'], author_id)
     return record_to_conversation(full)
+
+
+async def notify_community_activity(
+    pool: asyncpg.Pool,
+    community_id: UUID,
+    author_id: UUID,
+) -> None:
+    """Tell the community's members something was posted. Best-effort, off the request path.
+
+    Only new threads reach here. A reply is deliberately not community-wide
+    news: the people who care about a thread are the ones already in it, and
+    notifying every member on every reply is how a notification centre becomes
+    something users switch off.
+
+    The digest is raised before moderation has finished with the post, so a
+    thread that is removed a second later leaves a count one too high until the
+    member's next visit resets it. Worth it -- the alternative is holding every
+    notification behind the moderation pass and making the common case late.
+    """
+    try:
+        async with pool.acquire() as conn:
+            opened_for = await notifications_service.upsert_community_activity_digests(
+                conn, community_id, author_id
+            )
+    except Exception:
+        logger.exception('Failed to raise community activity digests for community %s', community_id)
+        return
+
+    # One event per member whose digest was newly opened, and none for the
+    # members whose count merely went up -- they have already been told.
+    await asyncio.gather(
+        *[
+            safe_publish(
+                f'user:{uid}',
+                {
+                    'type': 'notifications:community_activity',
+                    'payload': {'community_id': str(community_id)},
+                },
+            )
+            for uid in opened_for
+        ]
+    )
 
 
 async def reply_to_conversation(

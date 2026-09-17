@@ -6,10 +6,56 @@ from uuid import UUID
 import asyncpg
 from fastapi import HTTPException, status
 
-from app.common.config.constants import NOTIFICATION_RETENTION_DAYS, NOTIFICATIONS_PAGE_LIMIT
+from app.common.config.constants import (
+    COMMUNITY_ACTIVITY_COOLDOWN_HOURS,
+    NOTIFICATION_RETENTION_DAYS,
+    NOTIFICATIONS_PAGE_LIMIT,
+)
 from app.modules.notifications.models import NotificationResponse, NotificationCountResponse, NotificationType
 
 logger = logging.getLogger(__name__)
+
+
+UPSERT_COMMUNITY_ACTIVITY_DIGEST_SQL = """
+        INSERT INTO notifications (user_id, type, payload, group_key)
+        SELECT
+            cm.user_id,
+            'community_activity',
+            jsonb_build_object(
+                'community_id', c.id::text,
+                'community_name', c.name,
+                'community_image_url', c.image_url,
+                'count', 1,
+                '_since', GREATEST(
+                    COALESCE(cm.last_visited_at, cm.joined_at),
+                    COALESCE(uns.last_cleared_at, '-infinity'::timestamptz)
+                ),
+                '_visited', COALESCE(cm.last_visited_at, cm.joined_at)
+            ),
+            'community:' || c.id::text
+        FROM community_members cm
+        JOIN communities c ON c.id = cm.community_id
+        LEFT JOIN user_notification_state uns ON uns.user_id = cm.user_id
+        WHERE cm.community_id = $1
+          AND cm.user_id <> $2
+        ON CONFLICT (user_id, group_key) WHERE group_key IS NOT NULL
+        DO UPDATE SET
+            payload = CASE
+                WHEN notifications.created_at < (EXCLUDED.payload->>'_since')::timestamptz
+                    THEN EXCLUDED.payload
+                ELSE jsonb_set(
+                    notifications.payload,
+                    '{count}',
+                    to_jsonb(COALESCE((notifications.payload->>'count')::int, 0) + 1)
+                )
+            END,
+            created_at = NOW(),
+            updated_at = NOW()
+        WHERE notifications.created_at >= (EXCLUDED.payload->>'_since')::timestamptz
+           OR NOW() - (EXCLUDED.payload->>'_visited')::timestamptz
+              >= make_interval(hours => $3)
+        RETURNING user_id, (payload->>'count')::int AS count
+        """
 
 
 async def get_notifications(
@@ -123,6 +169,54 @@ async def create_notifications_bulk(
     except Exception:
         logger.exception('Failed to create notifications for users %s', [str(n[0]) for n in notifications])
         return None
+
+
+async def upsert_community_activity_digests(
+    conn: asyncpg.Connection,
+    community_id: UUID,
+    author_id: UUID,
+) -> list[UUID]:
+    """Raise or bump the community-activity digest for every member who should see it.
+
+    Returns the ids of members whose digest was *opened* by this call, which is
+    not the same as everyone whose count changed -- see the WS note below.
+
+    One statement, one round trip, whatever the community's size. The partial
+    unique index on (user_id, group_key) is what makes that possible: opening a
+    digest and adding to one are the same INSERT. The alternative -- a row per
+    member per post -- is what this whole design exists to avoid.
+
+    Three outcomes per member, decided in SQL because the decision needs the
+    member's own visit watermark:
+
+      * no digest yet            -> open one at a count of 1
+      * digest raised since their last visit -> still unseen, so add to it
+      * digest predates their last visit     -> they have been and looked; stay
+                                                silent until the cooldown has run
+
+    Two watermarks ride along in the proposed payload, because ON CONFLICT can
+    see only the proposed row and the existing one -- never the rows the SELECT
+    read them from:
+
+      * `_since`   the later of "opened this community" and "cleared the
+                   notification centre". Either means the member has drawn a
+                   line under what they have seen, so a digest older than it
+                   restarts at one rather than carrying its old count forward.
+      * `_visited` the community visit alone, which is what the cooldown keys
+                   off. Clearing the centre is not the same as catching up on a
+                   community and must not buy six hours of silence.
+    """
+    rows = await conn.fetch(
+        UPSERT_COMMUNITY_ACTIVITY_DIGEST_SQL,
+        community_id,
+        author_id,
+        COMMUNITY_ACTIVITY_COOLDOWN_HOURS,
+    )
+    # Only a freshly opened digest is worth a socket event. Publishing on every
+    # increment would put one Redis PUBLISH per member on every post and light
+    # the bell up repeatedly for something the member has already been told
+    # about; the climbing count rides along on the next fetch instead.
+    return [r['user_id'] for r in rows if r['count'] == 1]
 
 
 async def mark_read(conn: asyncpg.Connection, user_id: str) -> datetime:

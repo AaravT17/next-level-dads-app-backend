@@ -499,11 +499,21 @@ CREATE TABLE notifications (
     user_id         UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
     type            TEXT NOT NULL,
     payload         JSONB NOT NULL,
+    -- Set only on a digest; see idx_notifications_user_group below.
+    group_key       TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_notifications_user_created ON notifications (user_id, created_at DESC);
+
+-- Community activity arrives as a digest: one row per (member, community),
+-- updated in place, rather than one row per post per member. `group_key` names
+-- what is being digested ('community:<uuid>') and is NULL for every ordinary
+-- notification -- hence the partial unique index, which is what lets a single
+-- INSERT .. ON CONFLICT both open a digest and bump an existing one.
+CREATE UNIQUE INDEX idx_notifications_user_group ON notifications (user_id, group_key)
+    WHERE group_key IS NOT NULL;
 
 
 -- ── User Notification State ──────────────────────────────────────────────────

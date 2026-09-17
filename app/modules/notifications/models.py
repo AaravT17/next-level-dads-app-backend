@@ -4,7 +4,12 @@ from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
 
-NotificationType = Literal['connection_request', 'connection_accepted', 'chat_added']
+NotificationType = Literal[
+    'connection_request',
+    'connection_accepted',
+    'chat_added',
+    'community_activity',
+]
 
 
 class NotificationResponse(BaseModel):
