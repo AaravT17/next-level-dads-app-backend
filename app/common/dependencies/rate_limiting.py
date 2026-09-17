@@ -1,3 +1,5 @@
+# TODO: fastapi-limiter is poorly maintained. The _scoped() workaround fixes the bug for us,
+# but we might want to consider switching to a better-maintained library in the future.
 from math import ceil
 from collections.abc import Awaitable, Callable
 

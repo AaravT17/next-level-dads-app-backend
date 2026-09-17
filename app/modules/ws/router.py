@@ -9,6 +9,7 @@ from fastapi_limiter.depends import WebSocketRateLimiter
 
 import app.modules.auth.service as auth_service
 import app.modules.chats.service as chats_service
+import app.modules.notifications.service as notifications_service
 from app.common.config.constants import IS_PRODUCTION
 from app.common.config.redis import publish
 from app.common.dependencies.auth import check_consent
@@ -28,12 +29,15 @@ router = APIRouter(
     tags=['ws'],
 )
 
-# The socket carries no per-message auth, so an unbounded loop is an unbounded
-# invitation: every `chats:read` takes a connection from a pool of ten that the
-# whole HTTP surface shares. Sixty a minute is far above what marking threads
-# read requires and far below what would starve the pool.
-_MESSAGE_LIMIT_TIMES = 60
-_MESSAGE_LIMIT_SECONDS = 60
+# Per-event-type rate limits. Each type gets its own Redis key via context_key,
+# so one type's budget never eats into another's.
+_RATE_LIMITS: dict[str, tuple[int, int]] = {
+    'chats:read': (3, 5),              # 3 per 5s
+    'notifications:read': (3, 10),     # 3 per 10s
+    'notifications:cleared': (3, 60),  # 3 per 60s
+}
+
+WS_READY_EVENT = 'ws:ready'
 
 
 async def _over_budget(ws: WebSocket, pexpire: int) -> bool:
@@ -47,8 +51,8 @@ async def _over_budget(ws: WebSocket, pexpire: int) -> bool:
     return True
 
 
-def _message_limiter(user_id: str) -> WebSocketRateLimiter | None:
-    """Per-user limiter for the socket's inbound messages.
+def _make_limiters(user_id: str) -> dict[str, WebSocketRateLimiter]:
+    """Per-user, per-event-type limiters for the socket's inbound messages.
 
     The identifier is the authenticated user, not an IP. The library default
     would read the *leftmost* `X-Forwarded-For` entry -- the client-supplied one
@@ -58,17 +62,28 @@ def _message_limiter(user_id: str) -> WebSocketRateLimiter | None:
     # FastAPILimiter is only initialised in production (see main.py), and the
     # limiter raises without it.
     if not IS_PRODUCTION:
-        return None
+        return {}
 
     async def identifier(_ws: WebSocket) -> str:
         return user_id
 
-    return WebSocketRateLimiter(
-        times=_MESSAGE_LIMIT_TIMES,
-        seconds=_MESSAGE_LIMIT_SECONDS,
-        identifier=identifier,
-        callback=_over_budget,
-    )
+    return {
+        event_type: WebSocketRateLimiter(
+            times=times,
+            seconds=seconds,
+            identifier=identifier,
+            callback=_over_budget,
+        )
+        for event_type, (times, seconds) in _RATE_LIMITS.items()
+    }
+
+
+async def _send_ready_event(ws: WebSocket) -> None:
+    """
+    Signal that the socket is live and chat subscriptions are in place.
+    Signals to the client that it is now safe to query chat state.
+    """
+    await send_event(ws, {'type': WS_READY_EVENT})
 
 
 async def _close_at(ws: WebSocket, expires_at: datetime) -> None:
@@ -115,7 +130,7 @@ async def chat_websocket(ws: WebSocket):
     connection_id = str(uuid4())
     expires_at = token_expiry(token)
     expiry_task: asyncio.Task | None = None
-    limiter = _message_limiter(user_id)
+    limiters = _make_limiters(user_id)
 
     try:
         await register_connection(user_id, connection_id, ws, subprotocol=BEARER_SUBPROTOCOL)
@@ -127,10 +142,7 @@ async def chat_websocket(ws: WebSocket):
                 chat_ids = await chats_service.get_user_chat_ids(conn, user_id)
             await initialize_user_chats(user_id, chat_ids)
 
-        # Tell the client the socket is live and its chat subscriptions are in
-        # place. Queries gated on this cannot race the subscription setup and
-        # miss events published in between.
-        await send_event(ws, {'type': 'ws:ready'})
+        await _send_ready_event(ws)
 
         while True:
             text = await ws.receive_text()
@@ -139,13 +151,18 @@ async def chat_websocket(ws: WebSocket):
             except (json.JSONDecodeError, TypeError):
                 continue
 
-            # Drop the message, keep the socket: a client over budget is
-            # usually a loop in the client, not someone to disconnect.
-            if limiter is not None and await limiter(ws, context_key='messages'):
-                logger.warning('Rate-limited a WebSocket message from user %s', user_id)
+            msg_type = msg.get('type')
+            if not msg_type:
                 continue
 
-            if msg.get('type') == 'chats:read':
+            # Drop the message, keep the socket: a client over budget is
+            # usually a loop in the client, not someone to disconnect.
+            limiter = limiters.get(msg_type)
+            if limiter is not None and await limiter(ws, context_key=msg_type):
+                logger.warning('Rate-limited %s from user %s', msg_type, user_id)
+                continue
+
+            if msg_type == 'chats:read':
                 chat_id = msg.get('chat_id')
                 if not chat_id:
                     continue
@@ -165,6 +182,37 @@ async def chat_websocket(ws: WebSocket):
                         )
                 except Exception:
                     logger.exception('Failed to mark chat %s read for user %s', chat_id, user_id)
+
+            elif msg_type == 'notifications:read':
+                try:
+                    async with ws.app.state.pool.acquire() as conn:
+                        last_read_at = await notifications_service.mark_read(conn, user_id)
+                    await publish(
+                        f'user:{user_id}',
+                        {
+                            'type': 'notifications:read',
+                            'payload': {'last_read_at': last_read_at.isoformat()},
+                        },
+                    )
+                except Exception:
+                    logger.exception('Failed to mark notifications read for user %s', user_id)
+
+            elif msg_type == 'notifications:cleared':
+                try:
+                    async with ws.app.state.pool.acquire() as conn:
+                        last_read_at, last_cleared_at = await notifications_service.clear_all(conn, user_id)
+                    await publish(
+                        f'user:{user_id}',
+                        {
+                            'type': 'notifications:cleared',
+                            'payload': {
+                                'last_read_at': last_read_at.isoformat(),
+                                'last_cleared_at': last_cleared_at.isoformat(),
+                            },
+                        },
+                    )
+                except Exception:
+                    logger.exception('Failed to clear notifications for user %s', user_id)
 
     except WebSocketDisconnect:
         # the connection has already been closed, need not call ws.close() here

@@ -17,6 +17,7 @@ from app.modules.connections.router import router as connections_router
 from app.modules.moderation.router import router as moderation_router
 from app.modules.admin.router import router as admin_router
 from app.modules.chats.router import router as chats_router
+from app.modules.notifications.router import router as notifications_router
 from app.modules.ws.router import router as ws_router
 from app.common.config.redis import init_redis, close_redis, get_redis
 from app.common.config.pubsub import init_pubsub, close_pubsub
@@ -101,4 +102,5 @@ app.include_router(connections_router)
 app.include_router(moderation_router)
 app.include_router(admin_router)
 app.include_router(chats_router)
+app.include_router(notifications_router)
 app.include_router(ws_router)

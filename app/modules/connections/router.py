@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, status, Query, Request, Response
 from app.common.config.constants import IS_PRODUCTION
 from app.common.dependencies.rate_limiting import SendConnectionRequestLimiter
 from app.common.dependencies.auth import get_consented_user
-from app.common.dependencies.db import get_db
+from app.common.dependencies.db import get_db, get_pool
 import asyncpg
 import app.modules.connections.service as connections_service
 from uuid import UUID
@@ -69,6 +69,7 @@ async def send_connection_request(
     response: Response,
     body: SendConnectionRequestBody | None = None,
     conn: asyncpg.Connection = Depends(get_db),
+    pool: asyncpg.Pool = Depends(get_pool),
 ):
     curr_user_id = UUID(request.state.user_id)
 
@@ -80,7 +81,7 @@ async def send_connection_request(
         await assert_not_banned(conn, curr_user_id)
 
     result, created = await connections_service.send_connection_request(
-        conn, curr_user_id, target_user_id, note
+        conn, pool, curr_user_id, target_user_id, note
     )
     if not created:
         response.status_code = status.HTTP_409_CONFLICT
@@ -92,8 +93,9 @@ async def accept_connection_request(
     from_user_id: UUID,
     curr_user_id: str = Depends(get_consented_user),
     conn: asyncpg.Connection = Depends(get_db),
+    pool: asyncpg.Pool = Depends(get_pool),
 ):
-    await connections_service.accept_connection_request(conn, from_user_id, UUID(curr_user_id))
+    await connections_service.accept_connection_request(conn, pool, from_user_id, UUID(curr_user_id))
 
 
 @router.delete('/{target_user_id}', status_code=status.HTTP_204_NO_CONTENT)
