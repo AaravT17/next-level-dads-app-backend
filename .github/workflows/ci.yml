@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches the version the app is developed and deployed against.
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        # requirements-dev.txt pulls in requirements.txt; the tests import real
+        # app modules, so the runtime dependencies are needed too.
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check app main.py tests
+
+      # No environment is configured here on purpose. tests/conftest.py supplies
+      # placeholders, and nothing in the suite reaches a real service.
+      - name: Unit tests
+        run: pytest -q
+
+      - name: Import check
+        # Catches a broken import chain that the unit tests would not touch --
+        # this suite covers pure functions, not the whole router graph.
+        run: python -c "import main"
+        env:
+          ENV: test
+          FRONTEND_BASE_URL: http://localhost:5173
+          DATABASE_URL: postgresql://localhost/nld_test
+          REDIS_URL: redis://localhost:6379
+          SUPABASE_URL: https://test.supabase.co
+          SUPABASE_SECRET_KEY: test-secret-key

@@ -1,0 +1,1671 @@
+import asyncio
+import logging
+from datetime import datetime
+import time
+from typing import Literal
+from uuid import UUID
+import asyncpg
+from fastapi import HTTPException, status
+from app.common.utils.errors import value_error_to_http
+from app.common.config.constants import (
+    COMMUNITIES_PAGE_LIMIT,
+    COMMUNITY_IMAGES_BUCKET,
+    IMAGE_MIME_TO_EXT,
+    PROFILES_PAGE_LIMIT,
+    CONVERSATIONS_PAGE_LIMIT,
+    RESUME_PAGE_LIMIT,
+    MESSAGES_PAGE_LIMIT,
+    REPLIES_PAGE_LIMIT,
+    COMMUNITY_INVITE_MESSAGE,
+)
+import json
+from app.common.config.supabase import get_supabase_admin
+from app.modules.communities.models import (
+    CommunityResponse,
+    CommunityMemberResponse,
+    AuthorInfo,
+    ConversationResponse,
+    FeedConversationResponse,
+    ResumeConversationResponse,
+    MessageResponse,
+    ParticipantResponse,
+    ReplyResponse,
+)
+from app.modules.chats.models import SharedCommunityResponse
+import app.modules.chats.service as chats_service
+import app.modules.notifications.service as notifications_service
+from app.common.utils.tasks import safe_publish
+
+logger = logging.getLogger(__name__)
+
+
+REMOVED_CONVERSATION_TITLE = 'Removed post'
+REMOVED_BY_ORIGINAL_POSTER = 'Removed by original poster.'
+REMOVED_BY_MODERATOR = 'Removed by moderator.'
+
+_CONVERSATION_COLS = """
+    c.id,
+    c.community_id,
+    c.title,
+    c.body,
+    c.prompt_type,
+    c.is_deleted,
+    EXISTS (
+        SELECT 1 FROM moderation_reports mr
+        WHERE mr.content_type = 'conversation'
+          AND mr.content_id = c.id
+          AND mr.status = 'pending'
+    ) AS has_pending_report,
+    EXISTS (
+        SELECT 1 FROM moderation_filtered_messages mfm
+        WHERE mfm.content_type = 'conversation'
+          AND mfm.content_id = c.id
+          AND mfm.layer = 'report'
+    ) AS deleted_by_moderator,
+    c.deleted_at,
+    c.created_at,
+    c.updated_at,
+    c.last_activity_at,
+    u.id        AS author_id,
+    u.name      AS author_name,
+    u.avatar_url AS author_avatar_url,
+    u.about     AS author_about,
+    (
+        SELECT COUNT(*)
+        FROM conversation_messages cm
+        WHERE cm.conversation_id = c.id
+        AND (
+            EXISTS (
+                SELECT 1 FROM moderation_filtered_messages mfm
+                WHERE mfm.content_type = 'message'
+                  AND mfm.content_id = cm.id
+                  AND mfm.layer = 'report'
+            )
+            OR NOT EXISTS (
+            SELECT 1 FROM moderation_filtered_messages mfm
+            WHERE mfm.content_type = 'message' AND mfm.content_id = cm.id
+        ))
+    )
+    + (
+        SELECT COUNT(*)
+        FROM message_replies mr
+        JOIN conversation_messages cm ON mr.message_id = cm.id
+        WHERE cm.conversation_id = c.id
+        AND (
+            EXISTS (
+                SELECT 1 FROM moderation_filtered_messages mfm
+                WHERE mfm.content_type = 'message'
+                  AND mfm.content_id = cm.id
+                  AND mfm.layer = 'report'
+            )
+            OR NOT EXISTS (
+            SELECT 1 FROM moderation_filtered_messages mfm
+            WHERE mfm.content_type = 'message' AND mfm.content_id = cm.id
+        ))
+        AND (
+            EXISTS (
+                SELECT 1 FROM moderation_filtered_messages mfm
+                WHERE mfm.content_type = 'reply'
+                  AND mfm.content_id = mr.id
+                  AND mfm.layer = 'report'
+            )
+            OR NOT EXISTS (
+            SELECT 1 FROM moderation_filtered_messages mfm
+            WHERE mfm.content_type = 'reply' AND mfm.content_id = mr.id
+        ))
+    )
+    AS reply_count,
+    (SELECT COUNT(*) FROM conversation_hearts   ch  WHERE ch.conversation_id  = c.id) AS heart_count,
+    (SELECT COUNT(*) FROM conversation_participants cp WHERE cp.conversation_id = c.id) AS participant_count
+"""
+
+# A conversation is readable when moderation has not filtered it, or when the only
+# filter came from a report -- those stay visible so the client can tombstone them.
+_CONVERSATION_VISIBLE_SQL = """
+    (
+        EXISTS (
+            SELECT 1 FROM moderation_filtered_messages mfm
+            WHERE mfm.content_type = 'conversation'
+              AND mfm.content_id = c.id
+              AND mfm.layer = 'report'
+        )
+        OR NOT EXISTS (
+            SELECT 1 FROM moderation_filtered_messages mfm
+            WHERE mfm.content_type = 'conversation' AND mfm.content_id = c.id
+        )
+    )
+"""
+
+# A conversation carrying a report nobody has decided yet is withheld from the
+# cross-community feed. Inside a community it renders as the "potentially
+# harmful content" placeholder, which is a fair trade there: the reader chose
+# that community and can step past one hidden card. The feed offers no such
+# choice -- the card arrives unasked-for and its entire content is the warning,
+# so it spends a slot saying nothing. It returns to the feed if a moderator
+# dismisses the report, and _CONVERSATION_VISIBLE_SQL takes over if they action it.
+_CONVERSATION_UNREPORTED_SQL = """
+    NOT EXISTS (
+        SELECT 1 FROM moderation_reports mr
+        WHERE mr.content_type = 'conversation'
+          AND mr.content_id = c.id
+          AND mr.status = 'pending'
+    )
+"""
+
+# The most conversations a community card will ever claim. The badge renders 99+
+# past this, so counting further buys nothing -- and the LIMIT it feeds turns an
+# unbounded COUNT over a busy community into a fixed-cost index scan.
+NEW_ACTIVITY_CAP = 100
+
+# "N conversations active since you last visited", per community card.
+#
+# Counts threads with new activity rather than individual posts: one thread with
+# forty replies is one thing to come back to, not forty. That also means the whole
+# count is a range scan on idx_conversations_community_activity
+# (community_id, last_activity_at DESC), which already exists -- no denormalised
+# community_id on messages, and no backfill.
+#
+# Assumes `c` is the community and `cm` the caller's membership row, so it only
+# composes into queries that join both. It cannot reuse _CONVERSATION_VISIBLE_SQL:
+# that fragment hardcodes `c` as the conversation, which is the community here.
+_NEW_ACTIVITY_COUNT_SQL = f"""
+    (
+        SELECT COUNT(*) FROM (
+            SELECT 1 FROM conversations conv
+            WHERE conv.community_id = c.id
+              AND conv.last_activity_at > COALESCE(cm.last_visited_at, cm.joined_at)
+              AND NOT conv.is_deleted
+              AND (
+                  EXISTS (
+                      SELECT 1 FROM moderation_filtered_messages mfm
+                      WHERE mfm.content_type = 'conversation'
+                        AND mfm.content_id = conv.id
+                        AND mfm.layer = 'report'
+                  )
+                  OR NOT EXISTS (
+                      SELECT 1 FROM moderation_filtered_messages mfm
+                      WHERE mfm.content_type = 'conversation' AND mfm.content_id = conv.id
+                  )
+              )
+            LIMIT {NEW_ACTIVITY_CAP}
+        ) t
+    ) AS new_activity_count
+"""
+
+_TIME_WINDOW_SQL: dict[str, str] = {
+    'today': "AND c.last_activity_at >= NOW() - INTERVAL '1 day'",
+    'week': "AND c.last_activity_at >= NOW() - INTERVAL '7 days'",
+    'month': "AND c.last_activity_at >= NOW() - INTERVAL '30 days'",
+    'year': "AND c.last_activity_at >= NOW() - INTERVAL '365 days'",
+    'all': '',
+}
+
+_MESSAGE_COLS = """
+    m.id,
+    m.conversation_id,
+    m.body,
+    m.is_deleted,
+    EXISTS (
+        SELECT 1 FROM moderation_reports mr
+        WHERE mr.content_type = 'message'
+          AND mr.content_id = m.id
+          AND mr.status = 'pending'
+    ) AS has_pending_report,
+    EXISTS (
+        SELECT 1 FROM moderation_filtered_messages mfm
+        WHERE mfm.content_type = 'message'
+          AND mfm.content_id = m.id
+          AND mfm.layer = 'report'
+    ) AS deleted_by_moderator,
+    m.deleted_at,
+    m.created_at,
+    m.updated_at,
+    u.id         AS author_id,
+    u.name       AS author_name,
+    u.avatar_url  AS author_avatar_url,
+    u.about      AS author_about,
+    (SELECT COUNT(*) FROM message_hearts mh WHERE mh.message_id = m.id) AS heart_count,
+    (
+        SELECT COUNT(*)
+        FROM message_replies mr
+        WHERE mr.message_id = m.id
+        AND (
+            EXISTS (
+                SELECT 1 FROM moderation_filtered_messages mfm
+                WHERE mfm.content_type = 'reply'
+                  AND mfm.content_id = mr.id
+                  AND mfm.layer = 'report'
+            )
+            OR NOT EXISTS (
+            SELECT 1 FROM moderation_filtered_messages mfm
+            WHERE mfm.content_type = 'reply' AND mfm.content_id = mr.id
+        ))
+    ) AS reply_count
+"""
+
+_REPLY_COLS = """
+    r.id,
+    r.message_id,
+    r.body,
+    r.is_deleted,
+    EXISTS (
+        SELECT 1 FROM moderation_reports mr
+        WHERE mr.content_type = 'reply'
+          AND mr.content_id = r.id
+          AND mr.status = 'pending'
+    ) AS has_pending_report,
+    EXISTS (
+        SELECT 1 FROM moderation_filtered_messages mfm
+        WHERE mfm.content_type = 'reply'
+          AND mfm.content_id = r.id
+          AND mfm.layer = 'report'
+    ) AS deleted_by_moderator,
+    r.deleted_at,
+    r.created_at,
+    r.updated_at,
+    u.id         AS author_id,
+    u.name       AS author_name,
+    u.avatar_url  AS author_avatar_url,
+    u.about      AS author_about,
+    (SELECT COUNT(*) FROM reply_hearts rh WHERE rh.reply_id = r.id) AS heart_count
+"""
+
+
+async def discover_communities(
+    conn: asyncpg.Connection,
+    user_id: str,
+    name: str | None,
+    cursor_id: str | None,
+    cursor_created_at: datetime | None,
+) -> list[CommunityResponse]:
+    try:
+        query, params = _build_discover_communities_query(
+            user_id=UUID(user_id),
+            name=name,
+            cursor_id=UUID(cursor_id) if cursor_id else None,
+            cursor_created_at=cursor_created_at,
+        )
+        res = await conn.fetch(query, *params)
+        return [CommunityResponse(**dict(r)) for r in res]
+    except ValueError as e:
+        raise value_error_to_http(e, 'Failed to fetch communities. Please try again later.')
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch communities. Please try again later.',
+        )
+
+
+async def create_community(
+    conn: asyncpg.Connection,
+    user_id: str,
+    name: str,
+    description: str | None,
+) -> str:
+    try:
+        user_id = UUID(user_id)
+        async with conn.transaction():
+            res = await conn.fetchrow(
+                """
+                INSERT INTO communities (name, description, created_by, created_at)
+                VALUES ($1, $2, $3, NOW())
+                RETURNING id
+                """,
+                name,
+                description,
+                user_id,
+            )
+            if not res:
+                raise Exception('Failed to create community.')
+            community_id = res['id']
+            await conn.execute(
+                """
+                INSERT INTO community_members (community_id, user_id, role, joined_at)
+                VALUES ($1, $2, 'admin', NOW())
+                """,
+                community_id,
+                user_id,
+            )
+        return str(community_id)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to create community. Please try again later.',
+        )
+
+
+async def get_community(
+    conn: asyncpg.Connection,
+    community_id: str,
+    user_id: str,
+) -> CommunityResponse:
+    try:
+        query, params = _build_get_community_query(id=UUID(community_id), user_id=UUID(user_id))
+        res = await conn.fetchrow(query, *params)
+        if not res:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail='Community not found.',
+            )
+        return CommunityResponse(**dict(res))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise value_error_to_http(e, 'Failed to fetch community details. Please try again later.')
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch community details. Please try again later.',
+        )
+
+
+async def get_community_members(
+    conn: asyncpg.Connection,
+    community_id: str,
+    cursor_id: str | None,
+    cursor_joined_at: datetime | None,
+) -> list[CommunityMemberResponse]:
+    try:
+        query, params = _build_get_community_members_query(
+            id=UUID(community_id),
+            cursor_id=UUID(cursor_id) if cursor_id else None,
+            cursor_joined_at=cursor_joined_at,
+        )
+        res = await conn.fetch(query, *params)
+        results = []
+        for r in res:
+            data = dict(r)
+            # The user_profiles view hands these back as JSON strings.
+            data['interests'] = [json.loads(i) for i in data.get('interests', [])]
+            if data.get('icebreakers') is not None:
+                data['icebreakers'] = json.loads(data['icebreakers'])
+            results.append(CommunityMemberResponse(**data))
+        return results
+    except ValueError as e:
+        raise value_error_to_http(e, 'Failed to fetch community members. Please try again later.')
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch community members. Please try again later.',
+        )
+
+
+async def get_user_communities(
+    conn: asyncpg.Connection,
+    user_id: str,
+    name: str | None,
+    cursor_id: UUID | None,
+    cursor_created_at: datetime | None,
+) -> list[CommunityResponse]:
+    try:
+        query, params = _build_get_user_communities_query(
+            user_id=UUID(user_id),
+            name=name,
+            cursor_id=cursor_id,
+            cursor_created_at=cursor_created_at,
+        )
+        res = await conn.fetch(query, *params)
+        return [CommunityResponse(**dict(r)) for r in res]
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch communities. Please try again later.',
+        )
+
+
+async def join_community(
+    conn: asyncpg.Connection,
+    community_id: str,
+    user_id: str,
+):
+    try:
+        community_id, user_id = UUID(community_id), UUID(user_id)
+        await conn.execute(
+            """
+            INSERT INTO community_members (community_id, user_id, role, joined_at)
+            VALUES ($1, $2, 'member', NOW())
+            ON CONFLICT (community_id, user_id) DO NOTHING
+            """,
+            community_id,
+            user_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to join community. Please try again later.',
+        )
+
+
+async def leave_community(
+    conn: asyncpg.Connection,
+    community_id: str,
+    user_id: str,
+):
+    try:
+        community_id, user_id = UUID(community_id), UUID(user_id)
+        await conn.execute(
+            """
+            DELETE FROM community_members
+            WHERE community_id = $1 AND user_id = $2
+            """,
+            community_id,
+            user_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to leave community. Please try again later.',
+        )
+
+
+async def mark_community_visited(
+    conn: asyncpg.Connection,
+    community_id: str,
+    user_id: str,
+):
+    """Stamp the caller's visit, clearing their new-activity count for this community.
+
+    A no-op for non-members: there is no membership row to stamp, and someone who
+    has not joined has no badge to clear. That is silent rather than a 404 because
+    the caller is a fire-and-forget side effect of opening a page, not a request for
+    anything -- the client has no use for the failure and should not surface one.
+    """
+    try:
+        await conn.execute(
+            """
+            UPDATE community_members SET last_visited_at = NOW()
+            WHERE community_id = $1 AND user_id = $2
+            """,
+            UUID(community_id),
+            UUID(user_id),
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to record community visit. Please try again later.',
+        )
+
+
+async def update_community_image(
+    conn: asyncpg.Connection,
+    community_id: str,
+    user_id: str,
+    file_contents: bytes,
+    mime_type: str | None,
+) -> str:
+    """Replace a community's photo and return its new public URL.
+
+    Admins only: the photo is how the community presents itself in every list,
+    so changing it is an act of ownership, not ordinary membership.
+    """
+    try:
+        community_id, user_id = UUID(community_id), UUID(user_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid community id.')
+
+    await _assert_community_admin(conn, community_id, user_id)
+
+    image_url = await _upload_community_image_to_storage(community_id, file_contents, mime_type)
+    try:
+        await conn.execute(
+            'UPDATE communities SET image_url = $1 WHERE id = $2',
+            image_url,
+            community_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to update community photo. Please try again later.',
+        )
+    return image_url
+
+
+async def delete_community_image(
+    conn: asyncpg.Connection,
+    community_id: str,
+    user_id: str,
+):
+    try:
+        community_id, user_id = UUID(community_id), UUID(user_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid community id.')
+
+    await _assert_community_admin(conn, community_id, user_id)
+
+    try:
+        await conn.execute('UPDATE communities SET image_url = NULL WHERE id = $1', community_id)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to remove community photo. Please try again later.',
+        )
+    # The row is the source of truth. A file left behind is invisible to every
+    # reader, so a failed storage delete must not fail the request.
+    await _delete_community_image_from_storage(community_id)
+
+
+async def _assert_community_admin(
+    conn: asyncpg.Connection,
+    community_id: UUID,
+    user_id: UUID,
+):
+    """404 when the community is gone, 403 when the caller is not one of its admins."""
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT cm.role
+            FROM communities c
+            LEFT JOIN community_members cm ON cm.community_id = c.id AND cm.user_id = $2
+            WHERE c.id = $1
+            """,
+            community_id,
+            user_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to verify community permissions. Please try again later.',
+        )
+
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Community not found.')
+    if row['role'] != 'admin':
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='Only community admins can change the community photo.',
+        )
+
+
+async def _upload_community_image_to_storage(
+    community_id: UUID,
+    file_contents: bytes,
+    mime_type: str | None,
+) -> str:
+    """Validate mime type, upload the photo to Supabase storage, and return the public URL."""
+    if not mime_type or mime_type not in IMAGE_MIME_TO_EXT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Invalid community photo type. Supported types: PNG, JPG, JPEG.',
+        )
+    supabase_admin = get_supabase_admin()
+    path = str(community_id)
+    try:
+        await supabase_admin.storage.from_(COMMUNITY_IMAGES_BUCKET).upload(
+            path=path,
+            file=file_contents,
+            file_options={'content-type': mime_type, 'upsert': 'true'},
+        )
+        public_url = await supabase_admin.storage.from_(COMMUNITY_IMAGES_BUCKET).get_public_url(path)
+        return _versioned_url(public_url)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to upload community photo. Please try again later.',
+        )
+
+
+def _versioned_url(public_url: str) -> str:
+    """Stamp the stored URL so a replaced photo is not served from cache.
+
+    The file always sits at the same path, so without this every upload returns
+    a URL the browser already has and the old photo keeps showing until a hard
+    refresh. The stamp only ever changes when a new file is uploaded.
+    """
+    stamped = public_url.rstrip('?')
+    separator = '&' if '?' in stamped else '?'
+    return f'{stamped}{separator}v={int(time.time())}'
+
+
+async def _delete_community_image_from_storage(community_id: UUID):
+    supabase_admin = get_supabase_admin()
+    try:
+        await supabase_admin.storage.from_(COMMUNITY_IMAGES_BUCKET).remove([str(community_id)])
+    except Exception:
+        # TODO: Log the exception
+        pass
+
+
+async def list_conversations(
+    conn: asyncpg.Connection,
+    community_id: UUID,
+    user_id: UUID,
+    sort: Literal['recent', 'popular', 'active'] = 'recent',
+    time_window: Literal['today', 'week', 'month', 'year', 'all'] = 'all',
+    cursor_id: UUID | None = None,
+    cursor_last_activity_at: datetime | None = None,
+    cursor_heart_count: int | None = None,
+    cursor_reply_count: int | None = None,
+) -> list[asyncpg.Record]:
+    params: list = [community_id, user_id]
+    i = 3
+
+    time_filter = _TIME_WINDOW_SQL[time_window]
+
+    cursor_condition = ''
+    if sort == 'recent' and cursor_last_activity_at and cursor_id:
+        cursor_condition = f'WHERE (last_activity_at, id) < (${i}, ${i + 1})'
+        params.extend([cursor_last_activity_at, cursor_id])
+        i += 2
+    elif sort == 'popular' and cursor_heart_count is not None and cursor_id:
+        cursor_condition = f'WHERE (heart_count, id) < (${i}, ${i + 1})'
+        params.extend([cursor_heart_count, cursor_id])
+        i += 2
+    elif sort == 'active' and cursor_reply_count is not None and cursor_id:
+        cursor_condition = f'WHERE (reply_count, id) < (${i}, ${i + 1})'
+        params.extend([cursor_reply_count, cursor_id])
+        i += 2
+
+    if sort == 'popular':
+        order_by = 'heart_count DESC, id DESC'
+    elif sort == 'active':
+        order_by = 'reply_count DESC, id DESC'
+    else:
+        order_by = 'last_activity_at DESC, id DESC'
+
+    query = f"""
+        WITH convs AS (
+            SELECT
+                {_CONVERSATION_COLS},
+                EXISTS (
+                    SELECT 1 FROM conversation_hearts ch
+                    WHERE ch.conversation_id = c.id AND ch.user_id = $2
+                ) AS is_hearted
+            FROM conversations c
+            LEFT JOIN public.users u ON u.id = c.author_id
+            WHERE c.community_id = $1
+            AND {_CONVERSATION_VISIBLE_SQL}
+            {time_filter}
+        )
+        SELECT * FROM convs
+        {cursor_condition}
+        ORDER BY {order_by}
+        LIMIT ${i}
+    """
+    params.append(CONVERSATIONS_PAGE_LIMIT)
+    return await conn.fetch(query, *params)
+
+
+def _build_feed_conversations_query(
+    user_id: UUID,
+    following: bool = False,
+    cursor_id: UUID | None = None,
+    cursor_created_at: datetime | None = None,
+) -> tuple[str, list]:
+    """The feed query and its bind parameters, built without touching the database.
+
+    Split out from list_feed_conversations so the feed's exclusions can be
+    asserted in a unit test -- the moderation ones in particular are invisible
+    from the response, since the whole point is that nothing comes back.
+    """
+    params: list = [user_id]
+    i = 2
+
+    # Membership is the only "following" relationship -- the same one /api/users/me/communities uses.
+    membership_join = (
+        'JOIN community_members cm ON cm.community_id = c.community_id AND cm.user_id = $1'
+        if following
+        else ''
+    )
+
+    cursor_condition = ''
+    if cursor_created_at and cursor_id:
+        cursor_condition = f'AND (c.created_at, c.id) < (${i}, ${i + 1})'
+        params.extend([cursor_created_at, cursor_id])
+        i += 2
+
+    query = f"""
+        SELECT
+            {_CONVERSATION_COLS},
+            comm.name AS community_name,
+            EXISTS (
+                SELECT 1 FROM conversation_hearts ch
+                WHERE ch.conversation_id = c.id AND ch.user_id = $1
+            ) AS is_hearted
+        FROM conversations c
+        LEFT JOIN public.users u ON u.id = c.author_id
+        JOIN communities comm ON comm.id = c.community_id
+        {membership_join}
+        WHERE NOT c.is_deleted
+        AND {_CONVERSATION_VISIBLE_SQL}
+        AND {_CONVERSATION_UNREPORTED_SQL}
+        {cursor_condition}
+        ORDER BY c.created_at DESC, c.id DESC
+        LIMIT ${i}
+    """
+    params.append(CONVERSATIONS_PAGE_LIMIT)
+    return query, params
+
+
+async def list_feed_conversations(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    following: bool = False,
+    cursor_id: UUID | None = None,
+    cursor_created_at: datetime | None = None,
+) -> list[asyncpg.Record]:
+    """Newest-first conversations across every community, with the source community name.
+
+    Deleted rows are excluded: the per-community list keeps them as tombstones for
+    thread history, but in a cross-community feed they carry no context. Threads
+    with an undecided report are excluded for a related reason -- see
+    _CONVERSATION_UNREPORTED_SQL.
+    """
+    query, params = _build_feed_conversations_query(
+        user_id,
+        following=following,
+        cursor_id=cursor_id,
+        cursor_created_at=cursor_created_at,
+    )
+    return await conn.fetch(query, *params)
+
+
+async def list_resume_conversations(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    limit: int = RESUME_PAGE_LIMIT,
+) -> list[asyncpg.Record]:
+    """Conversations the caller has a stake in, most recently active first.
+
+    A stake is authoring the thread, replying in it, or hearting it. Ordering is
+    by the thread's activity rather than by when the caller acted, because the
+    point of the section is what moved since they last looked -- a thread they
+    posted in a month ago belongs at the top if it got a reply this morning.
+
+    `unseen_reply_count` counts other people's messages added after the caller's
+    own last action on the thread. It uses the same moderation visibility as
+    reply_count so a card cannot promise more replies than the thread will show.
+    """
+    query = f"""
+        SELECT
+            {_CONVERSATION_COLS},
+            comm.name AS community_name,
+            EXISTS (
+                SELECT 1 FROM conversation_hearts ch
+                WHERE ch.conversation_id = c.id AND ch.user_id = $1
+            ) AS is_hearted,
+            CASE
+                WHEN c.author_id = $1 THEN 'authored'
+                WHEN mine.last_message_at IS NOT NULL THEN 'replied'
+                ELSE 'hearted'
+            END AS reason,
+            (
+                SELECT COUNT(*)
+                FROM conversation_messages m2
+                WHERE m2.conversation_id = c.id
+                  AND m2.author_id IS DISTINCT FROM $1
+                  AND NOT m2.is_deleted
+                  AND m2.created_at > mine.acted_at
+                  AND (
+                      EXISTS (
+                          SELECT 1 FROM moderation_filtered_messages mfm
+                          WHERE mfm.content_type = 'message'
+                            AND mfm.content_id = m2.id
+                            AND mfm.layer = 'report'
+                      )
+                      OR NOT EXISTS (
+                          SELECT 1 FROM moderation_filtered_messages mfm
+                          WHERE mfm.content_type = 'message' AND mfm.content_id = m2.id
+                      )
+                  )
+            ) AS unseen_reply_count
+        FROM conversations c
+        LEFT JOIN public.users u ON u.id = c.author_id
+        JOIN communities comm ON comm.id = c.community_id
+        CROSS JOIN LATERAL (
+            SELECT
+                (
+                    SELECT MAX(m.created_at) FROM conversation_messages m
+                    WHERE m.conversation_id = c.id AND m.author_id = $1
+                ) AS last_message_at,
+                -- GREATEST ignores NULLs in Postgres, so this is simply the most
+                -- recent of whichever stakes the caller actually has.
+                GREATEST(
+                    CASE WHEN c.author_id = $1 THEN c.created_at END,
+                    (
+                        SELECT MAX(m.created_at) FROM conversation_messages m
+                        WHERE m.conversation_id = c.id AND m.author_id = $1
+                    ),
+                    (
+                        SELECT ch.created_at FROM conversation_hearts ch
+                        WHERE ch.conversation_id = c.id AND ch.user_id = $1
+                    )
+                ) AS acted_at
+        ) AS mine
+        WHERE NOT c.is_deleted
+        AND {_CONVERSATION_VISIBLE_SQL}
+        AND (
+            c.author_id = $1
+            OR mine.last_message_at IS NOT NULL
+            OR EXISTS (
+                SELECT 1 FROM conversation_hearts ch
+                WHERE ch.conversation_id = c.id AND ch.user_id = $1
+            )
+        )
+        ORDER BY c.last_activity_at DESC, c.id DESC
+        LIMIT $2
+    """
+    return await conn.fetch(query, user_id, limit)
+
+
+async def get_conversation(
+    conn: asyncpg.Connection,
+    conversation_id: UUID,
+    user_id: UUID,
+) -> asyncpg.Record | None:
+    query = f"""
+        SELECT
+            {_CONVERSATION_COLS},
+            EXISTS (
+                SELECT 1 FROM conversation_hearts ch
+                WHERE ch.conversation_id = c.id AND ch.user_id = $2
+            ) AS is_hearted
+        FROM conversations c
+        LEFT JOIN public.users u ON u.id = c.author_id
+        WHERE c.id = $1
+        AND {_CONVERSATION_VISIBLE_SQL}
+    """
+    return await conn.fetchrow(query, conversation_id, user_id)
+
+
+async def list_messages(
+    conn: asyncpg.Connection,
+    conversation_id: UUID,
+    user_id: UUID,
+    cursor_id: UUID | None = None,
+    cursor_created_at: datetime | None = None,
+) -> list[asyncpg.Record]:
+    conditions = [
+        'm.conversation_id = $1',
+        """
+        (
+            EXISTS (
+                SELECT 1 FROM moderation_filtered_messages mfm
+                WHERE mfm.content_type = 'message'
+                  AND mfm.content_id = m.id
+                  AND mfm.layer = 'report'
+            )
+            OR NOT EXISTS (
+            SELECT 1 FROM moderation_filtered_messages mfm
+            WHERE mfm.content_type = 'message' AND mfm.content_id = m.id
+        ))
+        """,
+    ]
+    params: list = [conversation_id, user_id]
+    i = 3
+
+    if cursor_created_at and cursor_id:
+        conditions.append(f'(m.created_at, m.id) > (${i}, ${i + 1})')
+        params.extend([cursor_created_at, cursor_id])
+        i += 2
+
+    where_clause = ' AND '.join(conditions)
+    query = f"""
+        SELECT
+            {_MESSAGE_COLS},
+            EXISTS (
+                SELECT 1 FROM message_hearts mh
+                WHERE mh.message_id = m.id AND mh.user_id = $2
+            ) AS is_hearted
+        FROM conversation_messages m
+        LEFT JOIN public.users u ON u.id = m.author_id
+        WHERE {where_clause}
+        ORDER BY m.created_at ASC, m.id ASC
+        LIMIT ${i}
+    """
+    params.append(MESSAGES_PAGE_LIMIT)
+    return await conn.fetch(query, *params)
+
+
+async def list_participants(
+    conn: asyncpg.Connection,
+    conversation_id: UUID,
+) -> list[asyncpg.Record]:
+    query = """
+        SELECT
+            u.id,
+            u.name,
+            u.avatar_url,
+            cp.first_joined_at,
+            cp.last_active_at
+        FROM conversation_participants cp
+        JOIN public.users u ON u.id = cp.user_id
+        WHERE cp.conversation_id = $1
+        ORDER BY cp.first_joined_at ASC
+    """
+    return await conn.fetch(query, conversation_id)
+
+
+async def insert_conversation(
+    conn: asyncpg.Connection,
+    community_id: UUID,
+    author_id: UUID,
+    title: str,
+    body: str,
+    prompt_type: str | None,
+) -> asyncpg.Record:
+    query = """
+        INSERT INTO conversations (community_id, author_id, title, body, prompt_type)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id
+    """
+    return await conn.fetchrow(query, community_id, author_id, title, body, prompt_type)
+
+
+async def upsert_participant(
+    conn: asyncpg.Connection,
+    conversation_id: UUID,
+    user_id: UUID,
+) -> None:
+    query = """
+        INSERT INTO conversation_participants (conversation_id, user_id, first_joined_at, last_active_at)
+        VALUES ($1, $2, NOW(), NOW())
+        ON CONFLICT (conversation_id, user_id)
+        DO UPDATE SET last_active_at = NOW()
+    """
+    await conn.execute(query, conversation_id, user_id)
+
+
+async def insert_message(
+    conn: asyncpg.Connection,
+    conversation_id: UUID,
+    author_id: UUID,
+    body: str,
+) -> asyncpg.Record:
+    query = """
+        INSERT INTO conversation_messages (conversation_id, author_id, body)
+        VALUES ($1, $2, $3)
+        RETURNING id
+    """
+    return await conn.fetchrow(query, conversation_id, author_id, body)
+
+
+async def touch_conversation(
+    conn: asyncpg.Connection,
+    conversation_id: UUID,
+) -> None:
+    query = """
+        UPDATE conversations
+        SET last_activity_at = NOW(), updated_at = NOW()
+        WHERE id = $1
+    """
+    await conn.execute(query, conversation_id)
+
+
+async def _assert_content_active(
+    conn: asyncpg.Connection,
+    table: str,
+    content_id: UUID,
+    label: str,
+) -> None:
+    """Raise 404 if the target row is missing or soft-deleted.
+
+    `table` is always a trusted literal supplied by the caller (never user
+    input), so the f-string interpolation is safe.
+    """
+    exists = await conn.fetchval(
+        f'SELECT EXISTS(SELECT 1 FROM {table} WHERE id = $1 AND NOT is_deleted)',
+        content_id,
+    )
+    if not exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f'{label} not found.',
+        )
+
+
+async def heart_conversation(
+    conn: asyncpg.Connection,
+    conversation_id: UUID,
+    user_id: UUID,
+) -> None:
+    await _assert_content_active(conn, 'conversations', conversation_id, 'Conversation')
+    await conn.execute(
+        """
+        INSERT INTO conversation_hearts (conversation_id, user_id)
+        VALUES ($1, $2)
+        ON CONFLICT DO NOTHING
+        """,
+        conversation_id,
+        user_id,
+    )
+
+
+async def unheart_conversation(
+    conn: asyncpg.Connection,
+    conversation_id: UUID,
+    user_id: UUID,
+) -> None:
+    await conn.execute(
+        'DELETE FROM conversation_hearts WHERE conversation_id = $1 AND user_id = $2',
+        conversation_id,
+        user_id,
+    )
+
+
+async def heart_message(
+    conn: asyncpg.Connection,
+    message_id: UUID,
+    user_id: UUID,
+) -> None:
+    await _assert_content_active(conn, 'conversation_messages', message_id, 'Message')
+    await conn.execute(
+        """
+        INSERT INTO message_hearts (message_id, user_id)
+        VALUES ($1, $2)
+        ON CONFLICT DO NOTHING
+        """,
+        message_id,
+        user_id,
+    )
+
+
+async def unheart_message(
+    conn: asyncpg.Connection,
+    message_id: UUID,
+    user_id: UUID,
+) -> None:
+    await conn.execute(
+        'DELETE FROM message_hearts WHERE message_id = $1 AND user_id = $2',
+        message_id,
+        user_id,
+    )
+
+
+async def _soft_delete_owned_content(
+    conn: asyncpg.Connection,
+    table: str,
+    content_id: UUID,
+    user_id: UUID,
+    label: str,
+) -> None:
+    record = await conn.fetchrow(
+        f'SELECT author_id, is_deleted FROM {table} WHERE id = $1',
+        content_id,
+    )
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f'{label} not found.',
+        )
+    if record['author_id'] != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f'You can only delete your own {label.lower()}.',
+        )
+    if record['is_deleted']:
+        return
+
+    await conn.execute(
+        f"""
+        UPDATE {table}
+        SET is_deleted = TRUE,
+            deleted_at = NOW(),
+            updated_at = NOW()
+        WHERE id = $1
+        """,
+        content_id,
+    )
+
+
+async def delete_conversation(
+    conn: asyncpg.Connection,
+    conversation_id: UUID,
+    user_id: UUID,
+) -> None:
+    await _soft_delete_owned_content(conn, 'conversations', conversation_id, user_id, 'Conversation')
+
+
+async def delete_message(
+    conn: asyncpg.Connection,
+    message_id: UUID,
+    user_id: UUID,
+) -> None:
+    await _soft_delete_owned_content(conn, 'conversation_messages', message_id, user_id, 'Message')
+
+
+async def delete_reply(
+    conn: asyncpg.Connection,
+    reply_id: UUID,
+    user_id: UUID,
+) -> None:
+    await _soft_delete_owned_content(conn, 'message_replies', reply_id, user_id, 'Reply')
+
+
+def _author(record: asyncpg.Record) -> AuthorInfo | None:
+    if record['author_id'] is None:
+        return None
+    return AuthorInfo(
+        id=record['author_id'],
+        name=record['author_name'],
+        avatar_url=record['author_avatar_url'],
+        about=record['author_about'],
+    )
+
+
+def record_to_conversation(record: asyncpg.Record) -> ConversationResponse:
+    is_deleted = record['is_deleted']
+    placeholder = REMOVED_BY_MODERATOR if record['deleted_by_moderator'] else REMOVED_BY_ORIGINAL_POSTER
+    return ConversationResponse(
+        id=record['id'],
+        community_id=record['community_id'],
+        author=_author(record),
+        title=REMOVED_CONVERSATION_TITLE if is_deleted else record['title'],
+        body=placeholder if is_deleted else record['body'],
+        prompt_type=record['prompt_type'],
+        reply_count=record['reply_count'],
+        heart_count=record['heart_count'],
+        participant_count=record['participant_count'],
+        is_hearted=record['is_hearted'],
+        is_deleted=is_deleted,
+        has_pending_report=record['has_pending_report'],
+        deleted_at=record['deleted_at'],
+        created_at=record['created_at'],
+        updated_at=record['updated_at'],
+        last_activity_at=record['last_activity_at'],
+    )
+
+
+def record_to_feed_conversation(record: asyncpg.Record) -> FeedConversationResponse:
+    conversation = record_to_conversation(record)
+    return FeedConversationResponse(
+        **conversation.model_dump(),
+        community_name=record["community_name"],
+    )
+
+
+def record_to_resume_conversation(record: asyncpg.Record) -> ResumeConversationResponse:
+    feed = record_to_feed_conversation(record)
+    return ResumeConversationResponse(
+        **feed.model_dump(),
+        reason=record['reason'],
+        unseen_reply_count=record['unseen_reply_count'],
+    )
+
+
+def record_to_message(record: asyncpg.Record) -> MessageResponse:
+    is_deleted = record['is_deleted']
+    placeholder = REMOVED_BY_MODERATOR if record['deleted_by_moderator'] else REMOVED_BY_ORIGINAL_POSTER
+    return MessageResponse(
+        id=record['id'],
+        conversation_id=record['conversation_id'],
+        author=_author(record),
+        body=placeholder if is_deleted else record['body'],
+        reply_count=record['reply_count'],
+        heart_count=record['heart_count'],
+        is_hearted=record['is_hearted'],
+        is_deleted=is_deleted,
+        has_pending_report=record['has_pending_report'],
+        deleted_at=record['deleted_at'],
+        created_at=record['created_at'],
+        updated_at=record['updated_at'],
+    )
+
+
+def record_to_reply(record: asyncpg.Record) -> ReplyResponse:
+    is_deleted = record['is_deleted']
+    placeholder = REMOVED_BY_MODERATOR if record['deleted_by_moderator'] else REMOVED_BY_ORIGINAL_POSTER
+    return ReplyResponse(
+        id=record['id'],
+        message_id=record['message_id'],
+        author=_author(record),
+        body=placeholder if is_deleted else record['body'],
+        heart_count=record['heart_count'],
+        is_hearted=record['is_hearted'],
+        is_deleted=is_deleted,
+        has_pending_report=record['has_pending_report'],
+        deleted_at=record['deleted_at'],
+        created_at=record['created_at'],
+        updated_at=record['updated_at'],
+    )
+
+
+def record_to_participant(record: asyncpg.Record) -> ParticipantResponse:
+    return ParticipantResponse(
+        id=record['id'],
+        name=record['name'],
+        avatar_url=record['avatar_url'],
+        first_joined_at=record['first_joined_at'],
+        last_active_at=record['last_active_at'],
+    )
+
+
+async def list_replies(
+    conn: asyncpg.Connection,
+    message_id: UUID,
+    user_id: UUID,
+    cursor_id: UUID | None = None,
+    cursor_heart_count: int | None = None,
+) -> list[asyncpg.Record]:
+    params: list = [message_id, user_id]
+    i = 3
+
+    cursor_condition = ''
+    if cursor_heart_count is not None and cursor_id:
+        cursor_condition = f'WHERE (heart_count, id) < (${i}, ${i + 1})'
+        params.extend([cursor_heart_count, cursor_id])
+        i += 2
+
+    query = f"""
+        WITH ranked AS (
+            SELECT
+                {_REPLY_COLS},
+                EXISTS (
+                    SELECT 1 FROM reply_hearts rh
+                    WHERE rh.reply_id = r.id AND rh.user_id = $2
+                ) AS is_hearted
+            FROM message_replies r
+            LEFT JOIN public.users u ON u.id = r.author_id
+            WHERE r.message_id = $1
+            AND (
+                EXISTS (
+                    SELECT 1 FROM moderation_filtered_messages mfm
+                    WHERE mfm.content_type = 'reply'
+                      AND mfm.content_id = r.id
+                      AND mfm.layer = 'report'
+                )
+                OR NOT EXISTS (
+                SELECT 1 FROM moderation_filtered_messages mfm
+                WHERE mfm.content_type = 'reply' AND mfm.content_id = r.id
+            ))
+        )
+        SELECT * FROM ranked
+        {cursor_condition}
+        ORDER BY heart_count DESC, id DESC
+        LIMIT ${i}
+    """
+    params.append(REPLIES_PAGE_LIMIT)
+    return await conn.fetch(query, *params)
+
+
+async def insert_reply(
+    conn: asyncpg.Connection,
+    message_id: UUID,
+    author_id: UUID,
+    body: str,
+) -> asyncpg.Record:
+    query = """
+        INSERT INTO message_replies (message_id, author_id, body)
+        VALUES ($1, $2, $3)
+        RETURNING id
+    """
+    return await conn.fetchrow(query, message_id, author_id, body)
+
+
+async def heart_reply(
+    conn: asyncpg.Connection,
+    reply_id: UUID,
+    user_id: UUID,
+) -> None:
+    await _assert_content_active(conn, 'message_replies', reply_id, 'Reply')
+    await conn.execute(
+        """
+        INSERT INTO reply_hearts (reply_id, user_id)
+        VALUES ($1, $2)
+        ON CONFLICT DO NOTHING
+        """,
+        reply_id,
+        user_id,
+    )
+
+
+async def unheart_reply(
+    conn: asyncpg.Connection,
+    reply_id: UUID,
+    user_id: UUID,
+) -> None:
+    await conn.execute(
+        'DELETE FROM reply_hearts WHERE reply_id = $1 AND user_id = $2',
+        reply_id,
+        user_id,
+    )
+
+
+async def reply_to_message(
+    conn: asyncpg.Connection,
+    message_id: UUID,
+    author_id: UUID,
+    body: str,
+) -> ReplyResponse:
+    # Fetch the parent conversation id rather than a bare EXISTS: a reply is
+    # activity in that thread, and last_activity_at has to move for it.
+    conversation_id = await conn.fetchval(
+        """
+        SELECT c.id
+        FROM conversation_messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE m.id = $1 AND NOT m.is_deleted AND NOT c.is_deleted
+        """,
+        message_id,
+    )
+    if conversation_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Message not found.',
+        )
+
+    async with conn.transaction():
+        row = await insert_reply(conn, message_id, author_id, body)
+        await touch_conversation(conn, conversation_id)
+    record = await conn.fetchrow(
+        f"""
+        SELECT
+            {_REPLY_COLS},
+            FALSE AS is_hearted
+        FROM message_replies r
+        LEFT JOIN public.users u ON u.id = r.author_id
+        WHERE r.id = $1
+        """,
+        row['id'],
+    )
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch created reply.',
+        )
+    return record_to_reply(record)
+
+
+async def start_conversation(
+    conn: asyncpg.Connection,
+    community_id: UUID,
+    author_id: UUID,
+    title: str,
+    body: str,
+    prompt_type: str | None,
+) -> ConversationResponse:
+    exists = await conn.fetchval('SELECT EXISTS(SELECT 1 FROM communities WHERE id = $1)', community_id)
+    if not exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Community not found.',
+        )
+
+    async with conn.transaction():
+        row = await insert_conversation(conn, community_id, author_id, title, body, prompt_type)
+        await upsert_participant(conn, row['id'], author_id)
+
+    full = await get_conversation(conn, row['id'], author_id)
+    return record_to_conversation(full)
+
+
+async def notify_community_activity(
+    pool: asyncpg.Pool,
+    community_id: UUID,
+    author_id: UUID,
+) -> None:
+    """Tell the community's members something was posted. Best-effort, off the request path.
+
+    Only new threads reach here. A reply is deliberately not community-wide
+    news: the people who care about a thread are the ones already in it, and
+    notifying every member on every reply is how a notification centre becomes
+    something users switch off.
+
+    The digest is raised before moderation has finished with the post, so a
+    thread that is removed a second later leaves a count one too high until the
+    member's next visit resets it. Worth it -- the alternative is holding every
+    notification behind the moderation pass and making the common case late.
+    """
+    try:
+        async with pool.acquire() as conn:
+            opened_for = await notifications_service.upsert_community_activity_digests(
+                conn, community_id, author_id
+            )
+    except Exception:
+        logger.exception('Failed to raise community activity digests for community %s', community_id)
+        return
+
+    # One event per member whose digest was newly opened, and none for the
+    # members whose count merely went up -- they have already been told.
+    await asyncio.gather(
+        *[
+            safe_publish(
+                f'user:{uid}',
+                {
+                    'type': 'notifications:community_activity',
+                    'payload': {'community_id': str(community_id)},
+                },
+            )
+            for uid in opened_for
+        ]
+    )
+
+
+async def reply_to_conversation(
+    conn: asyncpg.Connection,
+    conversation_id: UUID,
+    author_id: UUID,
+    body: str,
+) -> MessageResponse:
+    exists = await conn.fetchval(
+        'SELECT EXISTS(SELECT 1 FROM conversations WHERE id = $1 AND NOT is_deleted)',
+        conversation_id,
+    )
+    if not exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Conversation not found.',
+        )
+
+    async with conn.transaction():
+        row = await insert_message(conn, conversation_id, author_id, body)
+        await touch_conversation(conn, conversation_id)
+        await upsert_participant(conn, conversation_id, author_id)
+
+    # Fetch the new message by id — scanning the first page of list_messages
+    # misses it once the conversation has MESSAGES_PAGE_LIMIT+ messages (it
+    # sorts last by created_at).
+    record = await conn.fetchrow(
+        f"""
+        SELECT
+            {_MESSAGE_COLS},
+            FALSE AS is_hearted
+        FROM conversation_messages m
+        LEFT JOIN public.users u ON u.id = m.author_id
+        WHERE m.id = $1
+        """,
+        row['id'],
+    )
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to fetch created message.',
+        )
+    return record_to_message(record)
+
+
+# --- Private helpers ---
+
+
+def _build_discover_communities_query(
+    user_id: UUID,
+    name: str | None = None,
+    cursor_id: UUID | None = None,
+    cursor_created_at: datetime | None = None,
+) -> tuple[str, list]:
+    conditions = ['NOT EXISTS (SELECT 1 FROM community_members cm WHERE cm.community_id = c.id AND cm.user_id = $1)']
+    params = [user_id]
+    i = 2
+
+    if name:
+        conditions.append(f'c.name ILIKE ${i}')
+        params.append(f'%{name}%')
+        i += 1
+
+    if cursor_created_at and cursor_id:
+        conditions.append(f'(c.created_at, c.id) < (${i}, ${i + 1})')
+        params.extend([cursor_created_at, cursor_id])
+        i += 2
+
+    where_clause = ' AND '.join(conditions)
+    query = f"""
+        SELECT c.*,
+        (SELECT COUNT(*) FROM community_members cm WHERE cm.community_id = c.id) AS member_count,
+        FALSE AS is_member, NULL AS role,
+        -- Discover only lists communities the caller is NOT in, so there is no
+        -- watermark and nothing to return to. Selected as a literal to keep
+        -- CommunityResponse uniform across every read path.
+        0 AS new_activity_count
+        FROM communities c
+        WHERE {where_clause}
+        ORDER BY c.created_at DESC, c.id DESC
+        LIMIT ${i}
+    """
+    params.append(COMMUNITIES_PAGE_LIMIT)
+
+    return query, params
+
+
+def _build_get_user_communities_query(
+    user_id: UUID,
+    name: str | None = None,
+    cursor_id: UUID | None = None,
+    cursor_created_at: datetime | None = None,
+) -> tuple[str, list]:
+    i = 2
+    conditions = ['cm.user_id = $1']
+    params = [user_id]
+
+    if name:
+        conditions.append(f'c.name ILIKE ${i}')
+        params.append(f'%{name}%')
+        i += 1
+
+    if cursor_created_at and cursor_id:
+        conditions.append(f'(c.created_at, c.id) < (${i}, ${i + 1})')
+        params.extend([cursor_created_at, cursor_id])
+        i += 2
+
+    where_clause = ' AND '.join(conditions)
+    query = f"""
+        SELECT c.*,
+        (SELECT COUNT(*) FROM community_members m WHERE m.community_id = c.id) AS member_count,
+        cm.role, TRUE AS is_member,
+        {_NEW_ACTIVITY_COUNT_SQL}
+        FROM communities c
+        JOIN community_members cm ON c.id = cm.community_id
+        WHERE {where_clause}
+        ORDER BY c.created_at DESC, c.id DESC
+        LIMIT ${i}
+    """
+    params.append(COMMUNITIES_PAGE_LIMIT)
+
+    return query, params
+
+
+def _build_get_community_query(id: UUID, user_id: UUID) -> tuple[str, list]:
+    query = """
+        SELECT c.*,
+        (SELECT COUNT(*) FROM community_members m WHERE m.community_id = c.id) AS member_count,
+        cm.role, (CASE WHEN cm.user_id IS NOT NULL THEN TRUE ELSE FALSE END) AS is_member,
+        -- The badge belongs to the list you scan, not the page you are already on:
+        -- opening this community is what clears it. Kept as a literal so every read
+        -- path returns the same shape.
+        0 AS new_activity_count
+        FROM communities c
+        LEFT JOIN community_members cm ON c.id = cm.community_id AND cm.user_id = $2
+        WHERE c.id = $1
+    """
+    params = [id, user_id]
+    return query, params
+
+
+def _build_get_community_members_query(
+    id: UUID,
+    cursor_id: UUID | None = None,
+    cursor_joined_at: datetime | None = None,
+) -> tuple[str, list]:
+    conditions = ['cm.community_id = $1']
+    params = [id]
+    i = 2
+
+    if cursor_joined_at and cursor_id:
+        conditions.append(f'(cm.joined_at, cm.user_id) < (${i}, ${i + 1})')
+        params.extend([cursor_joined_at, cursor_id])
+        i += 2
+
+    where_clause = ' AND '.join(conditions)
+    query = f"""
+        SELECT u.*, cm.joined_at, cm.role
+        FROM user_profiles u
+        JOIN community_members cm ON u.id = cm.user_id
+        WHERE {where_clause}
+        ORDER BY cm.joined_at DESC, cm.user_id DESC
+        LIMIT ${i}
+    """
+    params.append(PROFILES_PAGE_LIMIT)
+
+    return query, params
+
+
+async def invite_to_community(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    community_id: UUID,
+    recipient_ids: list[UUID],
+) -> int:
+    """Send each recipient a DM inviting them to a community.
+
+    The invite carries no state of its own — it is a message with the community
+    attached, and the recipient joins from the community page like anyone else.
+    Recipients must be accepted connections, which also rules out inviting
+    yourself and inviting a user that does not exist.
+    """
+    try:
+        community = await conn.fetchrow(
+            """
+            SELECT
+                c.id,
+                c.name,
+                c.description,
+                c.image_url,
+                (SELECT COUNT(*) FROM community_members cm WHERE cm.community_id = c.id) AS member_count
+            FROM communities c
+            WHERE c.id = $1
+            """,
+            community_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to send invites. Please try again later.',
+        )
+
+    if community is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Community not found.')
+
+    try:
+        connections = await conn.fetch(
+            """
+            SELECT (CASE WHEN requesting_id = $1 THEN requested_id ELSE requesting_id END) AS user_id
+            FROM connections
+            WHERE (requesting_id = $1 OR requested_id = $1) AND status = 'accepted'
+            """,
+            user_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Failed to send invites. Please try again later.',
+        )
+
+    connected_ids = {r['user_id'] for r in connections}
+    if any(rid not in connected_ids for rid in recipient_ids):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='You can only invite users with whom you are connected',
+        )
+
+    chat_ids = await chats_service.send_community_invites(
+        conn,
+        sender_id=user_id,
+        recipient_ids=recipient_ids,
+        community=SharedCommunityResponse(
+            id=community['id'],
+            name=community['name'],
+            description=community['description'],
+            image_url=community['image_url'],
+            member_count=community['member_count'] or 0,
+        ),
+        content=COMMUNITY_INVITE_MESSAGE,
+    )
+    return len(chat_ids)

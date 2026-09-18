@@ -1,0 +1,176 @@
+import logging
+import os
+from fastapi import HTTPException, Response, status
+from supabase_auth.errors import AuthApiError
+from app.common.config.constants import IS_PRODUCTION, REFRESH_TOKEN_EXPIRY_DAYS
+from app.common.config.redis import publish
+from app.common.config.supabase import get_supabase
+from app.common.ws.connection_manager import SESSION_REVOKED_EVENT
+
+logger = logging.getLogger(__name__)
+
+
+async def register(email: str, password: str):
+    supabase = get_supabase()
+    try:
+        await supabase.auth.sign_up(
+            {
+                'email': email,
+                'password': password,
+                'options': {'email_redirect_to': f'{os.getenv("FRONTEND_BASE_URL")}/verify-email'},
+            }
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Something went wrong. Please try again later.',
+        )
+
+
+async def login(email: str, password: str, response: Response) -> str:
+    supabase = get_supabase()
+    try:
+        res = await supabase.auth.sign_in_with_password(
+            {
+                'email': email,
+                'password': password,
+            }
+        )
+    except AuthApiError as e:
+        if e.status == 400 and 'invalid login credentials' in e.message.lower():
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid credentials.')
+        if e.status == 400 and 'email not confirmed' in e.message.lower():
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail='Please verify your email before logging in.',
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Something went wrong. Please try again later.',
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Something went wrong. Please try again later.',
+        )
+    _set_refresh_cookie(response, res.session.refresh_token)
+    return res.session.access_token
+
+
+async def create_session_from_oauth(access_token: str, refresh_token: str, response: Response) -> str:
+    """Turn the tokens from an OAuth redirect into our own cookie-backed session.
+
+    Both tokens are checked, and checked against each other. The access token
+    says who the caller is; exchanging the refresh token proves that token is
+    real and, the part that matters, that it belongs to the same user. Without
+    the second check the refresh token is simply whatever was posted, so anyone
+    who could get a victim's browser to call this endpoint would pin a token of
+    their own choosing into the victim's session.
+
+    The exchange rotates the refresh token, so the cookie gets the rotated one
+    and the caller gets the matching fresh access token back.
+    """
+    supabase = get_supabase()
+    try:
+        user = await supabase.auth.get_user(access_token)
+        if not user or not user.user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid token.')
+
+        res = await supabase.auth.refresh_session(refresh_token)
+        if not res or not res.session or not res.session.user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid token.')
+        if res.session.user.id != user.user.id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid token.')
+    except HTTPException:
+        raise
+    except AuthApiError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid token.')
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Something went wrong. Please try again later.',
+        )
+    _set_refresh_cookie(response, res.session.refresh_token)
+    return res.session.access_token
+
+
+async def logout(access_token: str, response: Response):
+    supabase = get_supabase()
+    # Resolved before the sign-out, while the token still works. A WebSocket is
+    # authorised once, at connect, so without an explicit teardown the sockets
+    # this session opened keep delivering the user's messages after logout.
+    user_id = await verify_token(access_token)
+    try:
+        await supabase.auth.admin.sign_out(access_token, 'local')
+    except Exception:
+        # The cookie is cleared regardless: the user asked to log out and must
+        # end up logged out on this device either way. But this path leaves the
+        # refresh token valid on Supabase's side while the response still says
+        # success, so it has to be visible -- a run of these means sessions are
+        # not actually being revoked.
+        logger.exception('Supabase sign-out failed; refresh token may still be valid')
+
+    # TODO: This publishes session:revoked on user:{user_id}, which closes ALL sockets for the user across all
+    # devices. But logout is scoped 'local' (only this session's refresh token is revoked), so we don't want to close
+    # other devices' sockets. They reconnect fine since their refresh tokens are still valid, but they have to do an
+    # unnecessary disconnect/reconnect. Either remove this publish entirely (the frontend already closes its own
+    # socket on logout, and the watchdog covers token expiry), or scope it per-token by tracking which access token
+    # opened each WebSocket and only closing sockets that match.
+    if user_id:
+        try:
+            await publish(f'user:{user_id}', {'type': SESSION_REVOKED_EVENT})
+        except Exception:
+            # The cookie is still cleared and the token still revoked; only the
+            # live socket survives, and it dies at token expiry regardless.
+            logger.exception('Failed to publish session revocation for user %s', user_id)
+
+    _clear_refresh_cookie(response)
+
+
+async def refresh_session(refresh_token: str, response: Response) -> str:
+    supabase = get_supabase()
+    try:
+        res = await supabase.auth.refresh_session(refresh_token)
+    except AuthApiError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail='Invalid or expired refresh token.',
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Something went wrong. Please try again later.',
+        )
+    _set_refresh_cookie(response, res.session.refresh_token)
+    return res.session.access_token
+
+
+async def verify_token(token: str) -> str | None:
+    supabase = get_supabase()
+    try:
+        res = await supabase.auth.get_user(token)
+        return res.user.id if (res and res.user) else None
+    except Exception:
+        return None
+
+
+def _set_refresh_cookie(response: Response, refresh_token: str):
+    response.set_cookie(
+        key='refresh_token',
+        value=refresh_token,
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite='lax',
+        domain='.nextleveldads.ca' if IS_PRODUCTION else None,
+        max_age=60 * 60 * 24 * REFRESH_TOKEN_EXPIRY_DAYS,
+    )
+
+
+def _clear_refresh_cookie(response: Response):
+    response.delete_cookie(
+        key='refresh_token',
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite='lax',
+        domain='.nextleveldads.ca' if IS_PRODUCTION else None,
+    )

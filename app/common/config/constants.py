@@ -1,0 +1,174 @@
+import os
+
+# --- App ---
+# Every value below is read at import time, which happens after main.py calls
+# load_dotenv(). Validating here means a misconfigured deploy fails at startup
+# rather than silently changing behaviour: `IS_PRODUCTION` alone gates all rate
+# limiting and the refresh cookie's Secure flag, so a typo'd or missing ENV used
+# to turn both off with no error, no log, and a healthy-looking process.
+VALID_ENVS = frozenset({'production', 'development', 'test'})
+
+
+def _require_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f'{name} must be set in environment variables.')
+    return value
+
+
+ENV = _require_env('ENV')
+if ENV not in VALID_ENVS:
+    raise RuntimeError(f'ENV must be one of {sorted(VALID_ENVS)}, got {ENV!r}.')
+
+IS_PRODUCTION = ENV == 'production'
+
+# Read here purely so a missing value fails startup; the consumers keep reading
+# os.getenv so their call sites stay unchanged.
+_require_env('FRONTEND_BASE_URL')
+_require_env('DATABASE_URL')
+
+# --- Proxying ---
+# How many proxies of ours sit in front of the app, counted from the right of
+# X-Forwarded-For. Anything further left in that header was written by the
+# caller and must not be trusted. Render terminates TLS at one proxy; add one
+# per additional layer (a CDN in front, say).
+TRUSTED_PROXY_HOPS = int(os.getenv('TRUSTED_PROXY_HOPS', '1' if IS_PRODUCTION else '0'))
+# A single-value header set by the edge, if the platform provides one
+# (True-Client-IP on Render, CF-Connecting-IP behind Cloudflare). Preferred over
+# X-Forwarded-For because a client cannot append to it.
+TRUSTED_CLIENT_IP_HEADER = os.getenv('TRUSTED_CLIENT_IP_HEADER') or None
+
+# --- Auth ---
+MIN_PASSWORD_LENGTH = 8
+PASSWORD_SPECIAL_CHARACTERS = r'[-#!$@£%^&*()_+|~=`{}\[\]:";\'<>?,./\\]'
+REFRESH_TOKEN_EXPIRY_DAYS = 30
+
+# --- Users ---
+IMAGE_MIME_TO_EXT = {
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/jpg': '.jpg',
+}
+
+# Hard ceiling on an uploaded avatar or community photo. Uploads are read fully
+# into memory before they reach storage, so without a cap one authenticated
+# request can exhaust the dyno -- the same memory ceiling that forced the
+# torch/transformers removal. Five megabytes is well past any reasonable photo
+# once the client has downscaled it.
+MAX_IMAGE_UPLOAD_BYTES = 5 * 1024 * 1024
+AGE_RANGES = {
+    'Under 25': (0, 24),
+    '25-29': (25, 29),
+    '30-34': (30, 34),
+    '35-39': (35, 39),
+    '40-44': (40, 44),
+    '45-49': (45, 49),
+    '50-59': (50, 59),
+    '60+': (60, 200),
+}
+MAX_NAME_LENGTH = 100
+MAX_CITY_LENGTH = 100
+MAX_BIO_LENGTH = 500
+
+# Optional note on a connection request. Short on purpose: it is an
+# introduction to help the recipient decide, not the conversation itself.
+CONNECTION_NOTE_MAX_LENGTH = 300
+PROFILES_PAGE_LIMIT = 20
+MIN_INTERESTS = 3
+MAX_INTERESTS = 7
+MIN_ICEBREAKERS = 1
+MAX_ICEBREAKERS = 3
+MAX_ICEBREAKER_ANSWER_LENGTH = 250
+
+CHILDREN_AGE_RANGES = {'Expecting', 'Newborn', 'Toddler', 'Preschool', 'Elementary', 'Teen', 'Adult'}
+
+PROVINCES = {'AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'SK', 'YT'}
+
+GOALS = {'dad-friends', 'events', 'playdates', 'advice', 'communities', 'resources', 'experts'}
+
+CONNECTION_STYLES = {'close', 'casual', 'activity', 'family', 'playdate', 'gets-it'}
+
+MATCH_PRIORITIES = {'nearby', 'kid-ages', 'interests', 'connection-type', 'age', 'no-preference'}
+
+INTEREST_SLUGS = {
+    'sports', 'fitness', 'golf', 'outdoors', 'gaming', 'food', 'music',
+    'movies-tv', 'comedy', 'theatre', 'true-crime', 'travel', 'tech', 'cars',
+    'reading', 'photography', 'podcasts', 'art', 'fashion', 'collectibles',
+    'history', 'diy', 'board-games', 'pets', 'gardening', 'volunteering',
+    'finance', 'entrepreneurship', 'faith-spirituality', 'health-wellness',
+}
+
+ICEBREAKER_PROMPT_SLUGS = {
+    'fatherhood-taught-me', 'favourite-thing-with-kids', 'wish-id-known',
+    'dad-skill', 'hoping-to-meet', 'get-along-if', 'ideal-hangout',
+    'always-down-to', 'life-goal', 'ask-me-about', 'currently-obsessed',
+    'perfect-weekend', 'want-to-learn', 'wont-shut-up', 'unpopular-opinion',
+    'way-to-my-heart', 'dad-joke', 'weirdly-competitive', 'hill-ill-die-on',
+    'guilty-pleasure', 'dream-dinner-guest', 'settle-this',
+    'dream-travel-destination', 'bucket-list', 'party-story', 'fun-fact',
+    'proudest-achievement', 'two-truths-and-a-lie', 'biggest-pet-peeve',
+    'random-fact-i-love', 'favourite-quote', 'dad-stereotype',
+}
+
+# --- Communities ---
+COMMUNITY_NAME_MAX_LENGTH = 100
+COMMUNITY_DESCRIPTION_MAX_LENGTH = 500
+CONVERSATION_TITLE_MIN_LENGTH = 3
+CONVERSATION_TITLE_MAX_LENGTH = 120
+CONVERSATION_BODY_MAX_LENGTH = 3000
+
+# What a post is for, shown as a chip on the card. Optional -- most posts do not
+# need one -- but a fixed vocabulary rather than the free text this used to be:
+# the label only helps a reader scanning a list if the same intent always
+# carries the same word, and twelve spellings of "question" help nobody.
+#
+# Stored values, not display text; the client owns the capitalisation. Rows
+# written before this was closed may hold anything, and are still returned as
+# they were -- only new posts are checked against this set.
+CONVERSATION_PROMPT_TYPES = {'question', 'advice', 'story', 'win', 'vent'}
+COMMUNITIES_PAGE_LIMIT = 20
+CONVERSATIONS_PAGE_LIMIT = 10
+# The Home "get back into it" rail is a fixed shelf, not a browse surface.
+RESUME_PAGE_LIMIT = 10
+MESSAGES_PAGE_LIMIT = 10
+REPLIES_PAGE_LIMIT = 5
+# One invite fans out to one DM per recipient, so the cap is what keeps a single
+# tap from becoming a broadcast. Ten is a handful of friends, not a mailing list.
+COMMUNITY_INVITE_MAX_RECIPIENTS = 10
+COMMUNITY_INVITE_MESSAGE = "Check out this community. I think you'd enjoy it!"
+# Community photos live in their own bucket, keyed by community id, so a
+# community's photo is never confused with a user's avatar.
+COMMUNITY_IMAGES_BUCKET = 'community-images'
+
+# --- Chats ---
+CHAT_PREVIEWS_PAGE_LIMIT = 20
+CHAT_MESSAGES_PAGE_LIMIT = 50
+CHAT_PARTICIPANTS_PAGE_LIMIT = 20
+CHAT_ADDABLE_PARTICIPANTS_PAGE_LIMIT = 20
+
+# --- Events ---
+EVENT_NAME_MAX_LENGTH = 100
+EVENT_DESCRIPTION_MAX_LENGTH = 1000
+EVENT_LOCATION_MAX_LENGTH = 500
+EVENT_HOSTED_BY_ORG_NAME_MAX_LENGTH = 100
+EVENT_HOSTED_BY_CONTACT_EMAIL_MAX_LENGTH = 254  # max email length as per internet standard (RFC 5321)
+EVENT_HOSTED_BY_CONTACT_PHONE_MAX_LENGTH = 20
+EVENTS_PAGE_LIMIT = 20
+
+# --- Moderation ---
+# Temporary-ban policy: N auto-removed messages within the window -> ban
+MODERATION_BAN_THRESHOLD = 3
+MODERATION_BAN_WINDOW_HOURS = 24
+MODERATION_BAN_DURATION_HOURS = 6
+MODERATION_REPORT_REASON_MAX_LENGTH = 500
+MODERATION_NOTIFICATIONS_PAGE_LIMIT = 20
+
+# --- Notifications ---
+NOTIFICATIONS_PAGE_LIMIT = 20
+NOTIFICATION_RETENTION_DAYS = 30
+
+# Community activity notifies as a digest, not per post. While a digest is
+# unseen it keeps counting; once the member opens the community it is cleared,
+# and this is how long must then pass before that community may raise a fresh
+# one. Six hours caps a busy community at four interruptions a day.
+COMMUNITY_ACTIVITY_COOLDOWN_HOURS = 6

@@ -5,3 +5,6 @@ __pycache__/
 .claude
 AGENT.md
 .vscode/
+# Tool caches
+.pytest_cache/
+.ruff_cache/

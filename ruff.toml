@@ -1,0 +1,42 @@
+# Ruff's default rule set changes between releases, and a bare `ruff check` in
+# CI would therefore start failing on an upgrade rather than on a code change.
+# The selection below is explicit for that reason.
+
+line-length = 120
+target-version = "py311"
+
+[lint]
+select = [
+    "E4",   # import formatting
+    "E7",   # statement-level mistakes
+    "E9",   # syntax / IO errors
+    "F",    # pyflakes: undefined names, unused imports
+    "B",    # bugbear: real bug patterns
+    "C4",   # comprehension misuse
+    "UP",   # outdated syntax for the target version
+]
+
+ignore = [
+    # `def route(db = Depends(get_db))` is how FastAPI declares dependencies.
+    # The rule is right about plain Python and wrong about this framework.
+    "B008",
+
+    # `except Exception: raise HTTPException(...)` is the house pattern for
+    # turning a failure into a client-facing 500, and it appears 142 times.
+    # Adding `from err` to every one of them is a repo-wide mechanical diff with
+    # no behavioural change; worth doing deliberately, not as a side effect of
+    # switching CI on.
+    "B904",
+
+    # Would rewrite `class ContentType(str, Enum)` as `StrEnum`. Not equivalent:
+    # str() on a (str, Enum) member yields 'ContentType.MESSAGE' where StrEnum
+    # yields 'message', and these values are passed to asyncpg and compared
+    # against database CHECK constraints. Needs testing against a real database
+    # before it is worth the risk.
+    "UP042",
+]
+
+[lint.per-file-ignores]
+# Environment must be loaded before the app modules that read it at import time.
+"main.py" = ["E402"]
+"tests/conftest.py" = ["E402"]
