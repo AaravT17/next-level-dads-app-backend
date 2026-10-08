@@ -158,6 +158,12 @@ class CreateProfileRequest(BaseModel):
     def validate_icebreakers(cls, v: list[IcebreakerEntry]) -> list[IcebreakerEntry]:
         return _validate_icebreakers(v)
 
+    @model_validator(mode='after')
+    def validate_primary_goal_in_goals(self):
+        if self.primary_goal not in self.goals:
+            raise ValueError('Primary goal must be one of your selected goals.')
+        return self
+
 
 class UpdateProfileRequest(BaseModel):
     name: str | None = None
@@ -179,6 +185,17 @@ class UpdateProfileRequest(BaseModel):
         for field in self.model_fields_set:
             if getattr(self, field) is None:
                 raise ValueError(f'{_FIELD_LABELS.get(field, field)} cannot be set to null.')
+        return self
+
+    @model_validator(mode='after')
+    def validate_goals_and_primary_goal(self):
+        goals_sent = 'goals' in self.model_fields_set
+        primary_goal_sent = 'primary_goal' in self.model_fields_set
+        if goals_sent != primary_goal_sent:
+            raise ValueError('Goals and primary goal must be updated together.')
+        if goals_sent and primary_goal_sent:
+            if self.primary_goal not in self.goals:
+                raise ValueError('Primary goal must be one of your selected goals.')
         return self
 
     @field_validator('name')
