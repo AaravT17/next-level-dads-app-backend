@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Confirm Your Email</title>
+</head>
+<body style="margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;">
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr>
+      <td style="padding:32px 16px;">
+
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+          style="max-width:600px;background-color:#F7F1E6;border:1px solid #D4C9B8;border-radius:10px;overflow:hidden;">
+
+          <!-- Gold header -->
+          <tr>
+            <td align="center" bgcolor="#AD8225" style="padding:20px 16px;">
+              <p style="margin:0;color:#ffffff;font-size:20px;line-height:28px;font-weight:700;">
+                Welcome to Next Level Dads! 🎉
+              </p>
+            </td>
+          </tr>
+
+          <!-- Main content -->
+          <tr>
+            <td align="center" style="padding:48px 28px 0;text-align:center;color:#243035;">
+
+              <p style="margin:0 0 20px;font-size:20px;line-height:28px;">
+                You're almost there!
+              </p>
+
+              <p style="margin:0 0 20px;font-size:20px;line-height:30px;">
+                Thanks for joining Next Level Dads! We're excited to welcome you to our community of dads.
+              </p>
+
+              <p style="margin:0 0 28px;font-size:20px;line-height:30px;">
+                Confirm your email below to activate your account.
+              </p>
+
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto;">
+                <tr>
+                  <td align="center" bgcolor="#AD8225" style="border-radius:7px;">
+                    <a href="{{ .ConfirmationURL }}"
+                       style="display:inline-block;padding:14px 32px;color:#ffffff;text-decoration:none;font-size:17px;line-height:24px;font-weight:700;border-radius:7px;">
+                      Confirm My Email
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:26px 0 0;color:#756A5D;font-size:13px;line-height:20px;">
+                Didn't sign up? You can safely ignore this email.
+              </p>
+
+            </td>
+          </tr>
+
+          <!-- Logo -->
+          <tr>
+            <td align="right" style="padding:24px 20px 20px;">
+              <img src="{{ .SiteURL }}/logo.png"
+                   alt="Next Level Dads"
+                   width="90"
+                   style="display:block;width:90px;height:auto;border:0;">
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>

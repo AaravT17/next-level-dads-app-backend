@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime
 from uuid import UUID
@@ -12,6 +13,8 @@ from app.modules.connections.models import (
 import json
 from app.modules.connections.utils import resolve_connection_status
 import app.modules.notifications.service as notifications_service
+from app.common.utils.emails import send_email
+from app.modules.connections.email_templates import get_connection_request_email, get_connection_accepted_email
 
 logger = logging.getLogger(__name__)
 
@@ -264,25 +267,69 @@ async def remove_connection(
 
 
 async def _notify_connection_request(pool: asyncpg.Pool, target_user_id: UUID, payload: dict) -> None:
-    """Insert connection_request notification and publish WS event. Best-effort."""
-    async with pool.acquire() as conn:
-        notif = await notifications_service.create_notification(conn, target_user_id, 'connection_request', payload)
+    """Insert notification, publish WS event, and send email. Best-effort."""
+    notif, recipient = await asyncio.gather(
+        _create_notification(pool, target_user_id, 'connection_request', payload),
+        _fetch_recipient(pool, target_user_id),
+    )
     ws_payload = {**payload}
     if notif:
         ws_payload['notification_id'] = str(notif.id)
         ws_payload['notification_created_at'] = notif.created_at.isoformat()
-    await safe_publish(f'user:{target_user_id}', {'type': 'connections:request', 'payload': ws_payload})
+    tasks = [safe_publish(f'user:{target_user_id}', {'type': 'connections:request', 'payload': ws_payload})]
+    if recipient:
+        subject, html, text = get_connection_request_email(
+            recipient_name=recipient['name'],
+            from_name=payload['from_name'],
+            from_id=payload['from_id'],
+        )
+        tasks.append(_safe_send_email(recipient['email'], subject, html, text))
+    await asyncio.gather(*tasks)
 
 
 async def _notify_connection_accepted(pool: asyncpg.Pool, requester_id: UUID, payload: dict) -> None:
-    """Insert connection_accepted notification and publish WS event. Best-effort."""
-    async with pool.acquire() as conn:
-        notif = await notifications_service.create_notification(conn, requester_id, 'connection_accepted', payload)
+    """Insert notification, publish WS event, and send email. Best-effort."""
+    notif, recipient = await asyncio.gather(
+        _create_notification(pool, requester_id, 'connection_accepted', payload),
+        _fetch_recipient(pool, requester_id),
+    )
     ws_payload = {**payload}
     if notif:
         ws_payload['notification_id'] = str(notif.id)
         ws_payload['notification_created_at'] = notif.created_at.isoformat()
-    await safe_publish(f'user:{requester_id}', {'type': 'connections:accepted', 'payload': ws_payload})
+    tasks = [safe_publish(f'user:{requester_id}', {'type': 'connections:accepted', 'payload': ws_payload})]
+    if recipient:
+        subject, html, text = get_connection_accepted_email(
+            recipient_name=recipient['name'],
+            by_name=payload['by_name'],
+            by_id=payload['by_id'],
+        )
+        tasks.append(_safe_send_email(recipient['email'], subject, html, text))
+    await asyncio.gather(*tasks)
+
+
+async def _create_notification(pool: asyncpg.Pool, user_id: UUID, event_type: str, payload: dict):
+    async with pool.acquire() as conn:
+        return await notifications_service.create_notification(conn, user_id, event_type, payload)
+
+
+async def _fetch_recipient(pool: asyncpg.Pool, user_id: UUID):
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetchrow(
+                'SELECT au.email, pu.name FROM auth.users au JOIN public.users pu ON pu.id = au.id WHERE au.id = $1',
+                user_id,
+            )
+    except Exception:
+        logger.exception('Failed to fetch recipient info for user %s', user_id)
+        return None
+
+
+async def _safe_send_email(to: str, subject: str, html: str, text: str) -> None:
+    try:
+        await send_email(to, subject, html, text)
+    except Exception:
+        logger.exception('Failed to send email to %s', to)
 
 
 def _build_get_connections_query(
