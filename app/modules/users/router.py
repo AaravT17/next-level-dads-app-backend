@@ -20,7 +20,7 @@ from app.common.dependencies.rate_limiting import (
     UpdateAvatarLimiter,
     UpdateProfileLimiter,
 )
-from app.common.dependencies.auth import get_current_user, get_consented_customer
+from app.common.dependencies.auth import get_consented_customer, get_customer, get_viewer
 from app.modules.users.models import (
     MeResponse,
     UserProfileResponse,
@@ -45,7 +45,7 @@ router = APIRouter(prefix='/api/users', tags=['users'])
 
 
 @router.get('/me', response_model=MeResponse)
-async def get_me(conn: asyncpg.Connection = Depends(get_db), user_id: str = Depends(get_current_user)):
+async def get_me(conn: asyncpg.Connection = Depends(get_db), user_id: str = Depends(get_customer)):
     return await users_service.get_me(conn, user_id)
 
 
@@ -53,7 +53,7 @@ async def get_me(conn: asyncpg.Connection = Depends(get_db), user_id: str = Depe
 async def get_user_profile(
     id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_customer),
+    user_id: str = Depends(get_viewer),
 ):
     return await users_service.get_user_profile(conn, id, user_id)
 
@@ -62,9 +62,9 @@ async def get_user_profile(
     '/',
     status_code=status.HTTP_201_CREATED,
     response_model=MeResponse,
-    dependencies=[Depends(get_current_user), Depends(CreateProfileLimiter())]
+    dependencies=[Depends(get_customer), Depends(CreateProfileLimiter())]
     if IS_PRODUCTION
-    else [Depends(get_current_user)],
+    else [Depends(get_customer)],
 )
 async def create_profile(
     request: Request,
@@ -77,9 +77,9 @@ async def create_profile(
 @router.get(
     '/',
     response_model=list[UserProfileResponse],
-    dependencies=[Depends(get_consented_customer), Depends(DiscoverProfilesLimiter())]
+    dependencies=[Depends(get_viewer), Depends(DiscoverProfilesLimiter())]
     if IS_PRODUCTION
-    else [Depends(get_consented_customer)],
+    else [Depends(get_viewer)],
 )
 async def discover_profiles(
     request: Request,
@@ -213,7 +213,7 @@ async def get_user_stats(
 @router.post('/me/legal-acceptances', status_code=status.HTTP_204_NO_CONTENT)
 async def accept_legal_documents(
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_customer),
 ):
     await users_service.accept_legal_documents(conn, user_id)
 

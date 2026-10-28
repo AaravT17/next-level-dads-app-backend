@@ -21,7 +21,7 @@ from app.common.dependencies.rate_limiting import (
     UpdateCommunityImageLimiter,
 )
 from typing import Literal
-from app.common.dependencies.auth import get_consented_customer
+from app.common.dependencies.auth import get_consented_customer, get_viewer
 from app.modules.communities.models import CommunityResponse, CommunityMemberResponse
 from app.common.utils.errors import value_error_to_http
 from app.common.dependencies.db import get_db, get_pool
@@ -56,7 +56,7 @@ async def discover_communities(
     cursor_id: str | None = None,
     cursor_created_at: datetime | None = None,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_customer),
+    user_id: str = Depends(get_viewer),
 ):
     return await communities_service.discover_communities(conn, user_id, name, cursor_id, cursor_created_at)
 
@@ -82,7 +82,7 @@ async def create_community(
 async def get_community(
     id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_customer),
+    user_id: str = Depends(get_viewer),
 ):
     return await communities_service.get_community(conn, id, user_id)
 
@@ -93,7 +93,7 @@ async def get_community_members(
     cursor_id: str | None = Query(None),
     cursor_joined_at: datetime | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_customer),
+    user_id: str = Depends(get_viewer),
 ):
     return await communities_service.get_community_members(conn, id, cursor_id, cursor_joined_at)
 
@@ -197,7 +197,7 @@ async def get_community_conversations(
     cursor_heart_count: int | None = Query(None),
     cursor_reply_count: int | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_customer),
+    user_id: str = Depends(get_viewer),
 ):
     try:
         records = await communities_service.list_conversations(
@@ -287,7 +287,7 @@ async def get_conversations_feed(
     cursor_id: str | None = Query(None),
     cursor_created_at: datetime | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_customer),
+    user_id: str = Depends(get_viewer),
 ):
     try:
         records = await communities_service.list_feed_conversations(
@@ -313,7 +313,7 @@ async def get_conversations_feed(
 async def get_single_conversation(
     conversation_id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_customer),
+    user_id: str = Depends(get_viewer),
 ):
     try:
         record = await communities_service.get_conversation(conn, UUID(conversation_id), UUID(user_id))
@@ -359,7 +359,7 @@ async def get_conversation_messages(
     cursor_id: str | None = Query(None),
     cursor_created_at: datetime | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_customer),
+    user_id: str = Depends(get_viewer),
 ):
     try:
         records = await communities_service.list_messages(
@@ -426,7 +426,7 @@ async def create_message(
 async def get_conversation_participants(
     conversation_id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_customer),
+    user_id: str = Depends(get_viewer),
 ):
     try:
         records = await communities_service.list_participants(conn, UUID(conversation_id))
@@ -555,7 +555,7 @@ async def get_message_replies(
     cursor_id: str | None = Query(None),
     cursor_heart_count: int | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_customer),
+    user_id: str = Depends(get_viewer),
 ):
     try:
         records = await communities_service.list_replies(
