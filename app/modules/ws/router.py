@@ -7,12 +7,11 @@ from uuid import uuid4
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from fastapi_limiter.depends import WebSocketRateLimiter
 
-import app.modules.auth.service as auth_service
 import app.modules.chats.service as chats_service
 import app.modules.notifications.service as notifications_service
-from app.common.config.constants import IS_PRODUCTION
+from app.common.config.constants import GHOST_ROLES, IS_PRODUCTION
 from app.common.config.redis import publish
-from app.common.dependencies.auth import check_consent
+from app.common.dependencies.auth import check_consent, resolve_current_user
 from app.common.ws.connection_manager import (
     register_connection,
     unregister_connection,
@@ -32,8 +31,8 @@ router = APIRouter(
 # Per-event-type rate limits. Each type gets its own Redis key via context_key,
 # so one type's budget never eats into another's.
 _RATE_LIMITS: dict[str, tuple[int, int]] = {
-    'chats:read': (3, 5),              # 3 per 5s
-    'notifications:read': (3, 10),     # 3 per 10s
+    'chats:read': (3, 5),  # 3 per 5s
+    'notifications:read': (3, 10),  # 3 per 10s
     'notifications:cleared': (3, 60),  # 3 per 60s
 }
 
@@ -113,10 +112,15 @@ async def chat_websocket(ws: WebSocket):
         await ws.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
-    user_id = await auth_service.verify_token(token)
-    if not user_id:
+    try:
+        user = await resolve_current_user(token)
+    except Exception:
+        user = None
+
+    if user is None or user.role in GHOST_ROLES:
         await ws.close(code=status.WS_1008_POLICY_VIOLATION)
         return
+    user_id = user.id
 
     async with ws.app.state.pool.acquire() as conn:
         consented = await check_consent(conn, user_id)

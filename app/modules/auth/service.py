@@ -5,7 +5,9 @@ from supabase_auth.errors import AuthApiError
 from app.common.config.constants import IS_PRODUCTION, REFRESH_TOKEN_EXPIRY_DAYS
 from app.common.config.redis import publish
 from app.common.config.supabase import get_supabase
+from app.common.dependencies.auth import read_role
 from app.common.ws.connection_manager import SESSION_REVOKED_EVENT
+from app.modules.auth.models import SessionResponse
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +29,7 @@ async def register(email: str, password: str):
         )
 
 
-async def login(email: str, password: str, response: Response) -> str:
+async def login(email: str, password: str, response: Response) -> SessionResponse:
     supabase = get_supabase()
     try:
         res = await supabase.auth.sign_in_with_password(
@@ -53,11 +55,13 @@ async def login(email: str, password: str, response: Response) -> str:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Something went wrong. Please try again later.',
         )
+    # Read before the cookie is set, so an unrecognized role is refused with no session handed out.
+    role = read_role(res.session.user.id, res.session.user.app_metadata)
     _set_refresh_cookie(response, res.session.refresh_token)
-    return res.session.access_token
+    return SessionResponse(access_token=res.session.access_token, role=role)
 
 
-async def create_session_from_oauth(access_token: str, refresh_token: str, response: Response) -> str:
+async def create_session_from_oauth(access_token: str, refresh_token: str, response: Response) -> SessionResponse:
     """Turn the tokens from an OAuth redirect into our own cookie-backed session.
 
     Both tokens are checked, and checked against each other. The access token
@@ -90,8 +94,9 @@ async def create_session_from_oauth(access_token: str, refresh_token: str, respo
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Something went wrong. Please try again later.',
         )
+    role = read_role(res.session.user.id, res.session.user.app_metadata)
     _set_refresh_cookie(response, res.session.refresh_token)
-    return res.session.access_token
+    return SessionResponse(access_token=res.session.access_token, role=role)
 
 
 async def logout(access_token: str, response: Response):
@@ -127,7 +132,7 @@ async def logout(access_token: str, response: Response):
     _clear_refresh_cookie(response)
 
 
-async def refresh_session(refresh_token: str, response: Response) -> str:
+async def refresh_session(refresh_token: str, response: Response) -> SessionResponse:
     supabase = get_supabase()
     try:
         res = await supabase.auth.refresh_session(refresh_token)
@@ -141,8 +146,9 @@ async def refresh_session(refresh_token: str, response: Response) -> str:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Something went wrong. Please try again later.',
         )
+    role = read_role(res.session.user.id, res.session.user.app_metadata)
     _set_refresh_cookie(response, res.session.refresh_token)
-    return res.session.access_token
+    return SessionResponse(access_token=res.session.access_token, role=role)
 
 
 async def verify_token(token: str) -> str | None:

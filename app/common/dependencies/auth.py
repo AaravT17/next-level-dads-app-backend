@@ -21,7 +21,7 @@ class CurrentUser:
     role: str | None
 
 
-def _read_role(user_id: str, app_metadata: dict | None) -> str | None:
+def read_role(user_id: str, app_metadata: dict | None) -> str | None:
     """Read the role from app_metadata.
 
     Return the role if it is a known role or None for no role.
@@ -53,32 +53,40 @@ def get_current_access_token(
     return credentials.credentials
 
 
-async def get_current_user(request: Request, token: str = Depends(get_current_access_token)) -> CurrentUser:
-    """Return the caller's id and role from the access token."""
+async def resolve_current_user(token: str) -> CurrentUser | None:
+    """Return the user an access token belongs to, or None if Supabase does not recognize it.
+
+    Raises a 403 for an unrecognized role; any other failure propagates and the caller decides what it means.
+    """
     supabase = get_supabase()
     try:
         res = await supabase.auth.get_user(token)
-        if not res or not res.user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail='Invalid or expired token.',
-            )
-        user = CurrentUser(id=res.user.id, role=_read_role(res.user.id, res.user.app_metadata))
-        request.state.user_id = user.id
-        request.state.role = user.role
-        return user
+    except AuthApiError:
+        return None
+    if not res or not res.user:
+        return None
+    return CurrentUser(id=res.user.id, role=read_role(res.user.id, res.user.app_metadata))
+
+
+async def get_current_user(request: Request, token: str = Depends(get_current_access_token)) -> CurrentUser:
+    """Return the caller's id and role from the access token."""
+    try:
+        user = await resolve_current_user(token)
     except HTTPException:
         raise
-    except AuthApiError as _:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail='Invalid or expired token.',
-        )
     except Exception as _:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Something went wrong. Please try again later.',
         )
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail='Invalid or expired token.',
+        )
+    request.state.user_id = user.id
+    request.state.role = user.role
+    return user
 
 
 async def get_customer(user: CurrentUser = Depends(get_current_user)) -> str:
