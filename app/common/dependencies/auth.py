@@ -41,7 +41,7 @@ async def get_current_user(request: Request, token: str = Depends(get_current_ac
         )
 
 
-async def get_consented_user(
+async def get_consented_customer(
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ) -> str:
@@ -55,7 +55,7 @@ async def get_consented_user(
     return user_id
 
 
-async def get_admin_user(
+async def get_admin(
     conn: asyncpg.Connection = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ) -> str:

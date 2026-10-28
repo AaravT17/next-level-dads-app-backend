@@ -20,7 +20,7 @@ from app.common.dependencies.rate_limiting import (
     UpdateAvatarLimiter,
     UpdateProfileLimiter,
 )
-from app.common.dependencies.auth import get_current_user, get_consented_user
+from app.common.dependencies.auth import get_current_user, get_consented_customer
 from app.modules.users.models import (
     MeResponse,
     UserProfileResponse,
@@ -53,7 +53,7 @@ async def get_me(conn: asyncpg.Connection = Depends(get_db), user_id: str = Depe
 async def get_user_profile(
     id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
+    user_id: str = Depends(get_consented_customer),
 ):
     return await users_service.get_user_profile(conn, id, user_id)
 
@@ -77,9 +77,9 @@ async def create_profile(
 @router.get(
     '/',
     response_model=list[UserProfileResponse],
-    dependencies=[Depends(get_consented_user), Depends(DiscoverProfilesLimiter())]
+    dependencies=[Depends(get_consented_customer), Depends(DiscoverProfilesLimiter())]
     if IS_PRODUCTION
-    else [Depends(get_consented_user)],
+    else [Depends(get_consented_customer)],
 )
 async def discover_profiles(
     request: Request,
@@ -111,7 +111,7 @@ async def get_user_communities(
     cursor_id: UUID | None = Query(None),
     cursor_created_at: datetime | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
+    user_id: str = Depends(get_consented_customer),
 ):
     return await communities_service.get_user_communities(conn, user_id, name, cursor_id, cursor_created_at)
 
@@ -120,7 +120,7 @@ async def get_user_communities(
 async def get_user_conversations(
     limit: int = Query(RESUME_PAGE_LIMIT, ge=1, le=RESUME_PAGE_LIMIT),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
+    user_id: str = Depends(get_consented_customer),
 ):
     """Threads the caller has a stake in, for Home's "get back into it" rail.
 
@@ -149,7 +149,7 @@ async def get_user_events(
     cursor_id: UUID | None = Query(None),
     cursor_starts_at: datetime | None = Query(None),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
+    user_id: str = Depends(get_consented_customer),
 ):
     return await events_service.get_user_events(conn, user_id, name, cursor_id, cursor_starts_at)
 
@@ -157,9 +157,9 @@ async def get_user_events(
 @router.patch(
     '/me',
     response_model=MeResponse,
-    dependencies=[Depends(get_consented_user), Depends(UpdateProfileLimiter())]
+    dependencies=[Depends(get_consented_customer), Depends(UpdateProfileLimiter())]
     if IS_PRODUCTION
-    else [Depends(get_consented_user)],
+    else [Depends(get_consented_customer)],
 )
 async def update_profile(
     request: Request,
@@ -171,9 +171,9 @@ async def update_profile(
 
 @router.put(
     '/me/avatar',
-    dependencies=[Depends(get_consented_user), Depends(UpdateAvatarLimiter())]
+    dependencies=[Depends(get_consented_customer), Depends(UpdateAvatarLimiter())]
     if IS_PRODUCTION
-    else [Depends(get_consented_user)],
+    else [Depends(get_consented_customer)],
 )
 async def update_avatar(
     request: Request,
@@ -190,21 +190,21 @@ async def update_avatar(
 @router.delete('/me/avatar', status_code=status.HTTP_204_NO_CONTENT)
 async def delete_avatar(
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
+    user_id: str = Depends(get_consented_customer),
 ):
     await users_service.delete_avatar(conn, user_id)
 
 
 @router.delete('/me', status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(
-    user_id: str = Depends(get_consented_user),
+    user_id: str = Depends(get_consented_customer),
 ):
     await users_service.delete_user(user_id)
 
 
 @router.get('/me/stats', response_model=UserStatsResponse)
 async def get_user_stats(
-    user_id: str = Depends(get_consented_user),
+    user_id: str = Depends(get_consented_customer),
     conn: asyncpg.Connection = Depends(get_db),
 ):
     return await users_service.get_user_stats(conn, user_id)
@@ -222,6 +222,6 @@ async def accept_legal_documents(
 async def update_preferences(
     body: UpdatePreferencesRequest,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
+    user_id: str = Depends(get_consented_customer),
 ):
     await users_service.update_preferences(conn, user_id, body.marketing_emails_opt_in)
