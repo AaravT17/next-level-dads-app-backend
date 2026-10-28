@@ -14,7 +14,6 @@ CREATE TABLE public.users (
     province        VARCHAR(2) NOT NULL,
     about           TEXT NOT NULL,
     avatar_url      TEXT,
-    is_admin        BOOLEAN NOT NULL DEFAULT FALSE,
 
     -- Onboarding profile fields. All nullable: profiles created before the
     -- onboarding overhaul have none of them, and the flow lets a dad skip any
