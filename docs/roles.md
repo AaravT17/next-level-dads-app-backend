@@ -21,7 +21,7 @@ Login, the OAuth session exchange and refresh all return `{ access_token, role }
 | none (customer) | yes | Everything a member can, once the T&C and Privacy Policy are accepted |
 | `admin` | no | Browse community, event and profile content read-only, and use the admin tools |
 
-`KNOWN_ROLES` and `GHOST_ROLES` in `app/common/config/constants.py` define which roles the backend recognizes and which of them browse without a profile (a "ghost"). A ghost cannot create a profile, chat, connect, post or react, and cannot open the chat WebSocket.
+`KNOWN_ROLES` and `GHOST_ROLES` in `app/common/config/constants.py` define which roles the backend recognizes and which of them browse without a profile (a **ghost**). A ghost cannot create a profile, chat, connect, post or react, and cannot open the chat WebSocket.
 
 An unrecognized role value is refused with a 403 on every API call, on login, on the OAuth session exchange and on refresh, and the WebSocket is closed. The account is locked out until the value is fixed, which is deliberate: a typo must never grant access. Logout still works.
 
@@ -74,12 +74,12 @@ If it is a ghost role, add it to `GHOST_ROLES` in the frontend's `src/lib/roles.
 
 The frontend only decides what to draw and which requests to skip. The backend enforces everything above.
 
-- A ghost has `user: null` and a `role` in auth state. Sign-in, Google sign-in and a page reload skip the profile fetch for a ghost, and profile setup is skipped, so it lands on the home page.
-- Anything that waits for a profile stays off, since there is none: the chat WebSocket, ban and notification polling, the legal-acceptance modal, the incomplete-profile banner and the join prompt.
-- Requests for a member's own data (stats, chats, connections, notifications) are not sent. The page shows them empty and settled, not loading. This lives in `useMemberQuery`.
-- Controls that act (connect, join, post, react, register, create, report, edit, delete) stay on screen, disabled, so the app looks the way a member sees it. This lives in `useViewOnly`.
-- You, Settings and Edit profile show a placeholder named "Admin" with a Shield icon (`personalUser`). It is for display only and is never stored in auth state, so it can never be saved.
-- The moderation dashboard is gated on the `admin` role alone, not on having a profile.
+- **Auth state**: a ghost has `user: null` and a `role`. Sign-in, Google sign-in and a page reload skip the profile fetch for a ghost, and profile setup is skipped, so it lands on the home page.
+- **Profile-dependent features**: these stay off, since there is no profile. That covers the chat WebSocket, ban and notification polling, the legal-acceptance modal, the incomplete-profile banner and the join prompt.
+- **Member-only requests**: requests for a member's own data (stats, chats, connections, notifications) are not sent. The page shows them empty and settled, not loading. This lives in `useMemberQuery`.
+- **Action controls**: connect, join, post, react, register, create, report, edit and delete stay on screen, disabled, so the app looks the way a member sees it. This lives in `useViewOnly`.
+- **Personal pages**: You, Settings and Edit profile show a placeholder named "Admin" with a Shield icon (`personalUser`). It is for display only and is never stored in auth state, so it can never be saved.
+- **Moderation dashboard**: gated on the `admin` role alone, not on having a profile.
 
 ---
 
@@ -93,9 +93,9 @@ An admin has an `auth.users` row but no `public.users` row. The columns that rec
 
 Both migrations are in `db/migrations/` and are applied by hand, in this order:
 
-1. `20261028000000_admin_actor_fks.sql` repoints the moderator-action columns at `auth.users`. It must come first: while the old constraints exist, deleting an admin's profile row blanks who made each decision.
-2. Deploy the backend and the frontend together. The backend stops reading `users.is_admin`, and the frontend starts reading `role`.
-3. `20261028000001_move_admin_flag_to_app_metadata.sql` copies each admin's flag into `app_metadata.role` and drops the column. Run it once, after step 2, because the old backend still selects the column. From this point existing admins are ghosts.
-4. Delete the old admins' `public.users` rows, if they are no longer wanted. This comes after step 3, which reads the flag from those rows.
+1. **`20261028000000_admin_actor_fks.sql`**: repoints the moderator-action columns at `auth.users`. It must come first: while the old constraints exist, deleting an admin's profile row blanks who made each decision.
+2. **Deploy the backend and the frontend together**: the backend stops reading `users.is_admin`, and the frontend starts reading `role`.
+3. **`20261028000001_move_admin_flag_to_app_metadata.sql`**: copies each admin's flag into `app_metadata.role` and drops the column. Run it once, after step 2, because the old backend still selects the column. From this point existing admins are ghosts.
+4. **Delete the old admins' `public.users` rows**, if they are no longer wanted. This comes after step 3, which reads the flag from those rows.
 
 Before relying on it, sign in as a test user with `role` set to `admin`: an admin route should answer 200 and a member route 403.
