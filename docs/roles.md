@@ -66,8 +66,36 @@ If the person signs in with Google using the same verified email, they land on t
 
 Add it to `KNOWN_ROLES` in `constants.py` first, and to `GHOST_ROLES` too if it should browse without a profile. Only then assign it in the database. A user given a role the backend does not know yet is locked out until the code ships.
 
+If it is a ghost role, add it to `GHOST_ROLES` in the frontend's `src/lib/roles.ts` as well. The two lists are kept in step by hand. The backend is the authority and refuses what a role may not do, but a ghost role missing from the frontend is treated as a member: it is sent to profile setup, and every member-only request fails with a 403.
+
+---
+
+## On the frontend
+
+The frontend only decides what to draw and which requests to skip. The backend enforces everything above.
+
+- A ghost has `user: null` and a `role` in auth state. Sign-in, Google sign-in and a page reload skip the profile fetch for a ghost, and profile setup is skipped, so it lands on the home page.
+- Anything that waits for a profile stays off, since there is none: the chat WebSocket, ban and notification polling, the legal-acceptance modal, the incomplete-profile banner and the join prompt.
+- Requests for a member's own data (stats, chats, connections, notifications) are not sent. The page shows them empty and settled, not loading. This lives in `useMemberQuery`.
+- Controls that act (connect, join, post, react, register, create, report, edit, delete) stay on screen, disabled, so the app looks the way a member sees it. This lives in `useViewOnly`.
+- You, Settings and Edit profile show a placeholder named "Admin" with a Shield icon (`personalUser`). It is for display only and is never stored in auth state, so it can never be saved.
+- The moderation dashboard is gated on the `admin` role alone, not on having a profile.
+
 ---
 
 ## Moderator actions and profiles
 
 An admin has an `auth.users` row but no `public.users` row. The columns that record who made a moderation decision (`actioned_by`, `created_by` and `lifted_by` on `moderation_reports`, `user_reports`, `moderation_filtered_messages` and `moderation_bans`) therefore reference `auth.users`, not `public.users`. Keep that when adding a new column that stores an admin's id.
+
+---
+
+## Rolling out
+
+Both migrations are in `db/migrations/` and are applied by hand, in this order:
+
+1. `20261028000000_admin_actor_fks.sql` repoints the moderator-action columns at `auth.users`. It must come first: while the old constraints exist, deleting an admin's profile row blanks who made each decision.
+2. Deploy the backend and the frontend together. The backend stops reading `users.is_admin`, and the frontend starts reading `role`.
+3. `20261028000001_move_admin_flag_to_app_metadata.sql` copies each admin's flag into `app_metadata.role` and drops the column. Run it once, after step 2, because the old backend still selects the column. From this point existing admins are ghosts.
+4. Delete the old admins' `public.users` rows, if they are no longer wanted. This comes after step 3, which reads the flag from those rows.
+
+Before relying on it, sign in as a test user with `role` set to `admin`: an admin route should answer 200 and a member route 403.
