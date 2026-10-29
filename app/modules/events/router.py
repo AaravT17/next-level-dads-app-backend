@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Query, status
-from app.common.dependencies.auth import get_consented_user
+from app.common.dependencies.auth import get_consented_customer, get_viewer
 from app.common.dependencies.db import get_db
 from app.modules.events.models import EventResponse
 import app.modules.events.service as events_service
@@ -23,7 +23,7 @@ async def discover_events(
     cursor_id: str | None = None,
     cursor_starts_at: datetime | None = None,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
+    user_id: str = Depends(get_viewer),
 ):
     return await events_service.discover_events(conn, user_id, name, event_type, is_free, cursor_id, cursor_starts_at)
 
@@ -32,7 +32,7 @@ async def discover_events(
 async def get_event(
     id: UUID,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
+    user_id: str = Depends(get_viewer),
 ):
     return await events_service.get_event(conn, id, user_id)
 
@@ -41,7 +41,7 @@ async def get_event(
 async def register_for_event(
     id: UUID,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
+    user_id: str = Depends(get_consented_customer),
 ):
     await events_service.register_for_event(conn, id, user_id)
 
@@ -50,6 +50,6 @@ async def register_for_event(
 async def unregister_from_event(
     id: UUID,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
+    user_id: str = Depends(get_consented_customer),
 ):
     await events_service.unregister_from_event(conn, id, user_id)

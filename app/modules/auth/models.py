@@ -6,11 +6,11 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
 
-    @field_validator("email", mode="before")
+    @field_validator('email', mode='before')
     def strip_email_whitespace(cls, email):
         return strip_email(email)
 
-    @field_validator("password")
+    @field_validator('password')
     def validate_password(cls, pwd):
         return validate_password_strength(pwd)
 
@@ -19,17 +19,16 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str
 
-    @field_validator("email", mode="before")
+    @field_validator('email', mode='before')
     def strip_email_whitespace(cls, email):
         return strip_email(email)
 
 
-class LoginResponse(BaseModel):
-    access_token: str
+class SessionResponse(BaseModel):
+    """Response model for login, OAuth session exchange, and refresh. `role` is None for a regular member."""
 
-
-class RefreshResponse(BaseModel):
     access_token: str
+    role: str | None
 
 
 class OAuthSessionRequest(BaseModel):

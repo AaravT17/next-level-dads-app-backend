@@ -74,7 +74,6 @@ class MeResponse(UserBase):
     primary_goal: str | None = None
     connection_styles: list[str] | None = None
     match_priorities: list[str] | None = None
-    is_admin: bool = False
     preferences: PreferencesData
     legal_acceptances: LegalAcceptancesData
     notification_state: NotificationStateData

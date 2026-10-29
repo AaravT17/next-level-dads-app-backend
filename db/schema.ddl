@@ -14,7 +14,6 @@ CREATE TABLE public.users (
     province        VARCHAR(2) NOT NULL,
     about           TEXT NOT NULL,
     avatar_url      TEXT,
-    is_admin        BOOLEAN NOT NULL DEFAULT FALSE,
 
     -- Onboarding profile fields. All nullable: profiles created before the
     -- onboarding overhaul have none of them, and the flow lets a dad skip any
@@ -384,8 +383,9 @@ CREATE TABLE moderation_filtered_messages (
     reason       TEXT,
     score        DOUBLE PRECISION,
     -- NULL when an automatic layer removed the content; set when a moderator
-    -- actioned a report.
-    actioned_by  UUID REFERENCES public.users(id) ON DELETE SET NULL,
+    -- actioned a report. Moderators have no profile row, so this references
+    -- auth.users like the other moderator columns below.
+    actioned_by  UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -406,7 +406,7 @@ CREATE TABLE moderation_reports (
     -- The moderator who last decided this report and when. Written for every
     -- decision, dismissal included -- a dismissal is a call someone made and
     -- is worth attributing. NULL means no moderator has looked at it yet.
-    actioned_by  UUID REFERENCES public.users(id) ON DELETE SET NULL,
+    actioned_by  UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     actioned_at  TIMESTAMPTZ,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (content_type, content_id, reporter_id)
@@ -424,8 +424,8 @@ CREATE TABLE moderation_bans (
     reason     TEXT,
     -- Who issued the ban and who lifted it early. NULL created_by means an
     -- automatic layer issued it; expires_at in the past is the lift itself.
-    created_by UUID REFERENCES public.users(id) ON DELETE SET NULL,
-    lifted_by  UUID REFERENCES public.users(id) ON DELETE SET NULL,
+    created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    lifted_by  UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ NOT NULL
 );
@@ -463,7 +463,7 @@ CREATE TABLE user_reports (
     -- The moderator who last decided this report and when. Written for every
     -- decision, dismissal included -- a dismissal is a call someone made and
     -- is worth attributing. NULL means no moderator has looked at it yet.
-    actioned_by UUID REFERENCES public.users(id) ON DELETE SET NULL,
+    actioned_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     actioned_at TIMESTAMPTZ,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

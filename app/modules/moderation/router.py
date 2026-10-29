@@ -3,7 +3,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from app.common.config.constants import IS_PRODUCTION
 from app.common.dependencies.rate_limiting import ReportContentLimiter, ReportUserLimiter
-from app.common.dependencies.auth import get_consented_user
+from app.common.dependencies.auth import get_consented_customer
 from app.common.utils.errors import value_error_to_http
 from app.common.dependencies.db import get_db
 from app.modules.moderation.models import (
@@ -33,9 +33,9 @@ router = APIRouter(
     '/reports',
     response_model=ReportResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(get_consented_user), Depends(ReportContentLimiter())]
+    dependencies=[Depends(get_consented_customer), Depends(ReportContentLimiter())]
     if IS_PRODUCTION
-    else [Depends(get_consented_user)],
+    else [Depends(get_consented_customer)],
 )
 async def create_report(
     payload: ReportCreate,
@@ -66,7 +66,7 @@ async def create_report(
 @router.get('/ban', response_model=BanStatusResponse)
 async def get_my_ban(
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
+    user_id: str = Depends(get_consented_customer),
 ):
     """Report whether the current user is under an active posting ban."""
     try:
@@ -88,7 +88,7 @@ async def get_my_ban(
 async def get_notifications(
     unread_only: bool = Query(False),
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
+    user_id: str = Depends(get_consented_customer),
 ):
     """List the current user's moderation notifications (newest first)."""
     try:
@@ -110,7 +110,7 @@ async def get_notifications(
 async def read_notification(
     notification_id: str,
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
+    user_id: str = Depends(get_consented_customer),
 ):
     """Mark a single notification as read."""
     try:
@@ -132,7 +132,7 @@ async def read_notification(
 )
 async def read_all_notifications(
     conn: asyncpg.Connection = Depends(get_db),
-    user_id: str = Depends(get_consented_user),
+    user_id: str = Depends(get_consented_customer),
 ):
     """Mark all of the current user's notifications as read."""
     try:
@@ -150,9 +150,9 @@ async def read_all_notifications(
     '/user-reports',
     response_model=UserReportResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(get_consented_user), Depends(ReportUserLimiter())]
+    dependencies=[Depends(get_consented_customer), Depends(ReportUserLimiter())]
     if IS_PRODUCTION
-    else [Depends(get_consented_user)],
+    else [Depends(get_consented_customer)],
 )
 async def create_user_report(
     payload: UserReportCreate,

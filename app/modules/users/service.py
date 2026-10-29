@@ -419,7 +419,6 @@ def _build_get_me_query(user_id: str) -> tuple[str, list]:
     query = """
         SELECT
             up.*,
-            u.is_admin,
             json_build_object(
                 'marketing_emails_opt_in', COALESCE(pref.marketing_emails_opt_in, FALSE)
             )::jsonb AS preferences,
@@ -438,7 +437,6 @@ def _build_get_me_query(user_id: str) -> tuple[str, list]:
                 'last_cleared_at', uns.last_cleared_at
             )::jsonb AS notification_state
         FROM user_profiles up
-        JOIN public.users u ON u.id = up.id
         LEFT JOIN user_preferences pref ON pref.user_id = up.id
         LEFT JOIN user_notification_state uns ON uns.user_id = up.id
         WHERE up.id = $1

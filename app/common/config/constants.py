@@ -43,6 +43,15 @@ MIN_PASSWORD_LENGTH = 8
 PASSWORD_SPECIAL_CHARACTERS = r'[-#!$@£%^&*()_+|~=`{}\[\]:";\'<>?,./\\]'
 REFRESH_TOKEN_EXPIRY_DAYS = 30
 
+# --- Roles ---
+# A user's role lives in auth.users app_metadata.role, which only the service
+# role can write. No role => regular member. A value outside KNOWN_ROLES is
+# refused with a 403, so a typo locks the account out instead of granting access.
+ROLE_ADMIN = 'admin'
+KNOWN_ROLES = frozenset({ROLE_ADMIN})
+# Roles that browse without a profile and cannot take member actions.
+GHOST_ROLES = frozenset({ROLE_ADMIN})
+
 # --- Users ---
 IMAGE_MIME_TO_EXT = {
     'image/png': '.png',

@@ -4,7 +4,7 @@ from uuid import UUID
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.common.dependencies.auth import get_admin_user
+from app.common.dependencies.auth import get_admin
 from app.common.dependencies.db import get_db
 from app.modules.moderation.models import (
     AdminBanCreate,
@@ -60,7 +60,7 @@ async def get_content_reports(
     limit: int = Query(_DEFAULT_LIMIT, ge=1, le=200),
     offset: int = Query(_DEFAULT_OFFSET, ge=0),
     conn: asyncpg.Connection = Depends(get_db),
-    admin_id: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin),
 ):
     try:
         records = await list_content_reports(conn, status_filter, limit, offset)
@@ -81,7 +81,7 @@ async def update_content_report(
     report_id: UUID,
     payload: AdminReportStatusUpdate,
     conn: asyncpg.Connection = Depends(get_db),
-    admin_id: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin),
 ):
     try:
         async with conn.transaction():
@@ -159,7 +159,7 @@ async def get_user_reports(
     limit: int = Query(_DEFAULT_LIMIT, ge=1, le=200),
     offset: int = Query(_DEFAULT_OFFSET, ge=0),
     conn: asyncpg.Connection = Depends(get_db),
-    admin_id: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin),
 ):
     try:
         records = await list_user_reports(conn, status_filter, limit, offset)
@@ -180,7 +180,7 @@ async def update_user_report(
     report_id: UUID,
     payload: AdminReportStatusUpdate,
     conn: asyncpg.Connection = Depends(get_db),
-    admin_id: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin),
 ):
     try:
         async with conn.transaction():
@@ -231,7 +231,7 @@ async def get_filtered_messages(
     limit: int = Query(_DEFAULT_LIMIT, ge=1, le=200),
     offset: int = Query(_DEFAULT_OFFSET, ge=0),
     conn: asyncpg.Connection = Depends(get_db),
-    admin_id: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin),
 ):
     try:
         records = await list_filtered_messages_admin(conn, limit, offset)
@@ -252,7 +252,7 @@ async def get_content_context(
     content_type: str,
     content_id: UUID,
     conn: asyncpg.Connection = Depends(get_db),
-    admin_id: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin),
 ):
     if content_type not in {'conversation', 'message', 'reply'}:
         raise HTTPException(
@@ -279,7 +279,7 @@ async def get_user_context(
     user_id: UUID,
     limit: int = Query(200, ge=1, le=500),
     conn: asyncpg.Connection = Depends(get_db),
-    admin_id: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin),
 ):
     try:
         context = await get_user_activity_context_admin(conn, user_id, limit)
@@ -304,7 +304,7 @@ async def get_active_bans(
     limit: int = Query(_DEFAULT_LIMIT, ge=1, le=200),
     offset: int = Query(_DEFAULT_OFFSET, ge=0),
     conn: asyncpg.Connection = Depends(get_db),
-    admin_id: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin),
 ):
     try:
         records = await list_active_bans_admin(conn, limit, offset)
@@ -321,7 +321,7 @@ async def get_active_bans(
 async def create_ban(
     payload: AdminBanCreate,
     conn: asyncpg.Connection = Depends(get_db),
-    admin_id: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin),
 ):
     try:
         async with conn.transaction():
@@ -356,7 +356,7 @@ async def create_ban(
 async def remove_ban(
     ban_id: UUID,
     conn: asyncpg.Connection = Depends(get_db),
-    admin_id: str = Depends(get_admin_user),
+    admin_id: str = Depends(get_admin),
 ):
     try:
         lifted = await lift_ban(conn, ban_id, UUID(admin_id))
